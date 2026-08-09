@@ -56,6 +56,30 @@ infrastructure stood up for this repo) so that installing a plugin never depends
 own repository staying online. See `docs/CATALOG-AND-MIRROR.md` for the bucket, the path
 convention, and how a client is expected to verify what it downloads.
 
+## Repository hygiene — branch protection on `main` (fix-cycle-1)
+
+`main` has branch protection (verify: `gh api repos/SynkraAI/aiox-plugins/branches/main/protection`).
+What is on, what is deliberately off, and why:
+
+| Setting | Value | Why |
+|---|---|---|
+| `allow_force_pushes` | **off** | The commit history (every real publish) can't be rewritten. |
+| `allow_deletions` | **off** | `main` can't be deleted out from under installed clients. |
+| `required_linear_history` | **on** | No merge commits muddying the index's history. |
+| `required_status_checks` | **on**, `contexts: ["validate"]`, strict | If a PR is ever opened against this repo (e.g. by a human collaborator, since the publisher never opens one), CI must pass before it can merge. |
+| `required_pull_request_reviews` | **off, deliberately** | Turning this on would require EVERY change — including `publisher/publish.mjs`'s own direct commits — to go through a PR, which contradicts D22 (the publisher does not open a PR). This is the one setting NOT applied, and it's the reason the two facts ("branch is protected" and "the publisher pushes straight to main") are not in tension. |
+| `enforce_admins` | **off** | Consistent with the row above — nothing here should silently start blocking the publisher. |
+| `restrictions` (who may push) | **not set** (any collaborator with write access) | There is currently no distinct machine identity to name here — see the backlog card below. |
+
+**What this protects against, concretely:** nobody (accidentally or otherwise) rewrites or deletes
+the published history. **What it does NOT protect against yet:** a human collaborator with write
+access hand-editing `index/index.json` directly, bypassing `publisher/publish.mjs`'s validation
+(schema, artifact-identity binding, D24 duplicate guard) entirely — CI would catch it, but only
+*after* the push lands, not as a merge gate, because there is no PR step to gate. Closing that gap needs a distinct service credential that `restrictions` can name instead of "anyone
+with write" — tracked, not fixed here, as a backlog card in the product repo (a founder-level
+infra/cost decision, not a catalog-repo code change; not linked from here, consistent with this
+repo never referencing the product repo, AC1).
+
 ## What this repo does NOT do (yet)
 
 - It does not describe or perform pruning, removal, or revocation of a published entry. That
