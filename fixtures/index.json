@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-09T15:20:28.340Z",
+  "generated_at": "2026-08-09T15:20:29.972Z",
   "entries": [
     {
       "schema_version": "1.0.0",
@@ -25,6 +25,37 @@
       "published_at": "2026-08-09T15:20:28.340Z",
       "license": {
         "spdx_or_path": "MIT"
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "plugin_id": "sinkra-os",
+      "name": "SINKRA OS (fixture)",
+      "description": "FIXTURE ENTRY (055.W3.1 pipeline proof) — plugin #1 per D15. Not the real sinkra-os bundle (that ships via npm from sinkra-hub).",
+      "version": "0.0.0-fixture",
+      "tiers": [
+        "mapear",
+        "forjar"
+      ],
+      "digest": {
+        "algorithm": "sha256",
+        "value": "9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a"
+      },
+      "artifact": {
+        "mirror_url": "https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins-fixtures/sinkra-os/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz",
+        "r2_key": "plugins-fixtures/sinkra-os/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz"
+      },
+      "publisher": {
+        "subject": "acct_fixture_devops_055w31"
+      },
+      "published_at": "2026-08-09T15:20:29.972Z",
+      "license": {
+        "spdx_or_path": "MIT"
+      },
+      "overlay": {
+        "shadows": {
+          "review": "the Enterprise pack's own /review — declared, not accidental (D23 test case)"
+        }
       }
     }
   ]
