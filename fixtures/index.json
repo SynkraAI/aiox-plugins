@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-09T15:56:04.279Z",
+  "generated_at": "2026-08-09T15:59:50.270Z",
   "entries": [
     {
       "schema_version": "1.0.0",
@@ -86,6 +86,31 @@
         "shadows": {
           "review": "Hostile reason: `code`, <img src=x onerror=alert(1)>, a ] ( markdown-link-break ) attempt, and a\nnewline that tries to start a new blockquote line"
         }
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "plugin_id": "fixcycle1-smoke",
+      "name": "fix-cycle-1 post-protection smoke",
+      "description": "Confirms publisher/publish.mjs's own git push still succeeds after branch protection was applied to main (F-CR-PLUGINS-7 partial fix). Fixture only.",
+      "version": "0.0.0-fixture",
+      "tiers": [
+        "base"
+      ],
+      "digest": {
+        "algorithm": "sha256",
+        "value": "9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a"
+      },
+      "artifact": {
+        "mirror_url": "https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins-fixtures/fixcycle1-smoke/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz",
+        "r2_key": "plugins-fixtures/fixcycle1-smoke/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz"
+      },
+      "publisher": {
+        "subject": "acct_fixture_devops_055w31"
+      },
+      "published_at": "2026-08-09T15:59:50.269Z",
+      "license": {
+        "spdx_or_path": "MIT"
       }
     }
   ]
