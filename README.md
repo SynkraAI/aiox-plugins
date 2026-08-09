@@ -35,9 +35,10 @@ ships with zero entries; `fixtures/index.json` proves the pipeline against dispo
 
 The right to publish is itself an entitlement (D16). The identity recorded on every entry is the
 **entitlement subject** (`publisher.subject`) — never a GitHub handle — because it is the same
-mechanism that already proves payment and provisioning, and the same mechanism that can later
-revoke the right to publish. See `publisher/README.md` for how the pipeline is invoked and what it
-assumes about that identity today.
+mechanism that already proves payment and provisioning. See `publisher/README.md` for how the
+pipeline is invoked and what it assumes about that identity today. (Nothing in this repository
+prunes, removes, or acts on a published entry based on that identity — see AC8 in
+`docs/CATALOG-AND-MIRROR.md`.)
 
 ## No PR flow, by design
 

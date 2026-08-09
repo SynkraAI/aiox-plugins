@@ -16,7 +16,7 @@ explanation; the JSON Schema is the source of truth.
 | `digest` | yes | `{ algorithm: "sha256", value: <64 hex chars> }` of the exact bytes mirrored in R2. A client MUST recompute this after download and refuse to install on mismatch (AC4). |
 | `artifact.mirror_url` | yes | Public URL in AIOX-operated R2 — see `CATALOG-AND-MIRROR.md`. Never a pointer back into the author's own repository (that dependency is exactly what D22 removes). |
 | `artifact.r2_key` | no | Operational convenience — the object key inside the bucket. |
-| `publisher.subject` | yes | The entitlement subject that published this entry (D22). Never a GitHub handle — publishing is itself an entitlement (D16), so this is the identity that can be revoked. |
+| `publisher.subject` | yes | The entitlement subject that published this entry (D22). Never a GitHub handle — publishing is itself an entitlement (D16). |
 | `published_at` | yes | ISO-8601 timestamp. |
 | `license.spdx_or_path` | yes | SPDX id or in-package path to the license found at the package root, checked at publish (D24(c)). |
 | `overlay.shadows` | no | Present only when the plugin declares shadowing one or more base skills (D23). `{ "<base-skill>": "<mandatory reason>" }`. This is **REUSE**, not a new mechanism — it mirrors the identical `overlay.shadows` block already defined and enforced in the product repo's `.aiox-core/sync/OVERLAY-MANIFEST.md` (story `055.W2.2`). The catalog only *renders* it (AC9). |

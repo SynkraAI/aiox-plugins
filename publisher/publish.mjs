@@ -8,8 +8,8 @@
 // 055.W3.1 is exactly this: the publisher never opens a PR.
 //
 // IDENTITY: `--subject` is meant to be the entitlement subject (D22) — the same identity that
-// proves payment/provisioning and that can later be revoked to revoke the right to publish (D16).
-// This script does NOT verify that the caller genuinely holds that subject's entitlement; that
+// proves payment/provisioning; the right to publish is itself an entitlement (D16). This script
+// does NOT verify that the caller genuinely holds that subject's entitlement; that
 // verification is the CALLER's job (the AIOX service that invokes this script after checking a
 // signed token) and is explicitly out of scope here — recording that boundary rather than quietly
 // assuming it away.
