@@ -1,50 +1,39 @@
 #!/usr/bin/env node
 // scripts/validate-index.mjs — CI base check (structural, dependency-free).
 //
-// This is the SAME validation publisher/publish.mjs applies per-entry at write time, re-run over
-// a whole index file so CI catches a hand-edit that bypassed the pipeline, or drift between the
-// schema doc and the data. The FULL D20/D24 invariant suite (secret scanning, capability
-// analysis, id-immutability history, burned-name ledger, license-in-tarball check) is story
-// 055.W3.3 / Wave 4 — this is deliberately just the base structural gate this story owns.
+// Imports the SAME validation publisher/publish.mjs applies at write time (lib/entry-schema.mjs),
+// re-run over a whole index file so CI catches a hand-edit that bypassed the pipeline entirely, or
+// drift between the schema doc and the data. The FULL D20/D24 invariant suite (secret scanning,
+// capability analysis, id-immutability history, burned-name ledger, license-in-tarball check) is
+// story 055.W3.3 / Wave 4 — this is deliberately just the base structural + identity-binding gate
+// this story owns.
+//
+// fix-cycle-1 (055.W3.1 QG @architect, F-AC6-ARTIFACT-BINDING): now also runs checkArtifactBinding
+// per entry (imported, not reimplemented) so a hand-edited index that skips publish.mjs can't slip
+// an artifact pointing at a DIFFERENT plugin's path past CI either.
 
 import { readFileSync } from "node:fs";
-
-const KEBAB = /^[a-z0-9][a-z0-9-]*$/;
-const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-
-function validateEntry(entry, i, errors) {
-  const tag = `entries[${i}] (${entry.plugin_id ?? "?"})`;
-  if (entry.schema_version !== "1.0.0") errors.push(`${tag}: schema_version must be '1.0.0'`);
-  if (!KEBAB.test(entry.plugin_id ?? "")) errors.push(`${tag}: plugin_id must be kebab-case`);
-  if (!SEMVER.test(entry.version ?? "")) errors.push(`${tag}: version must be semver`);
-  if (!Array.isArray(entry.tiers) || entry.tiers.length === 0) errors.push(`${tag}: tiers must be non-empty array`);
-  if (!entry.digest || entry.digest.algorithm !== "sha256" || !SHA256_HEX.test(entry.digest.value ?? ""))
-    errors.push(`${tag}: digest.{algorithm:'sha256', value:<64 hex>} required`);
-  if (!entry.artifact?.mirror_url) errors.push(`${tag}: artifact.mirror_url required`);
-  if (!entry.publisher?.subject) errors.push(`${tag}: publisher.subject required`);
-  if (!entry.published_at) errors.push(`${tag}: published_at required`);
-  if (!entry.license?.spdx_or_path) errors.push(`${tag}: license.spdx_or_path required (D24(c))`);
-  if (entry.overlay?.shadows) {
-    for (const [skill, reason] of Object.entries(entry.overlay.shadows)) {
-      if (!reason || typeof reason !== "string" || !reason.trim()) {
-        errors.push(`${tag}: overlay.shadows.${skill} must carry a non-empty reason`);
-      }
-    }
-  }
-}
+import { validateEntryShape, checkArtifactBinding } from "../lib/entry-schema.mjs";
 
 function validateFile(path) {
   const data = JSON.parse(readFileSync(path, "utf8"));
   const errors = [];
   if (data.schema_version !== "1.0.0") errors.push(`${path}: top-level schema_version must be '1.0.0'`);
-  if (!Array.isArray(data.entries)) errors.push(`${path}: entries must be an array`);
-  else data.entries.forEach((e, i) => validateEntry(e, i, errors));
+  if (!Array.isArray(data.entries)) {
+    errors.push(`${path}: entries must be an array`);
+    return errors;
+  }
+
+  for (const [i, e] of data.entries.entries()) {
+    const tag = `${path} entries[${i}] (${e.plugin_id ?? "?"})`;
+    for (const err of validateEntryShape(e)) errors.push(`${tag}: ${err}`);
+    for (const err of checkArtifactBinding(e)) errors.push(`${tag}: ${err}`);
+  }
 
   // D24(a)/(b) base guard, replicated here so a hand-edit can't bypass what publish.mjs enforces:
   // no two entries with the same plugin_id+version but different digests.
   const seen = new Map();
-  for (const e of data.entries ?? []) {
+  for (const e of data.entries) {
     const key = `${e.plugin_id}@${e.version}`;
     if (seen.has(key) && seen.get(key) !== e.digest?.value) {
       errors.push(`${path}: duplicate ${key} with conflicting digest — D24 immutability violated`);

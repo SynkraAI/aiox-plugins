@@ -57,17 +57,17 @@
     },
     "artifact": {
       "type": "object",
-      "required": ["mirror_url"],
+      "required": ["mirror_url", "r2_key"],
       "additionalProperties": false,
       "properties": {
         "mirror_url": {
           "type": "string",
           "format": "uri",
-          "description": "Public URL of the artifact mirrored in AIOX-operated R2 (D22). Install never depends on the author's own repository."
+          "description": "Public URL of the artifact mirrored in AIOX-operated R2 (D22). Install never depends on the author's own repository. MUST contain the entry's own plugin_id as an exact path segment (fix-cycle-1, F-AC6-ARTIFACT-BINDING) — enforced in code (lib/entry-schema.mjs::checkArtifactBinding), not expressible in this JSON Schema draft alone (cross-field check)."
         },
         "r2_key": {
           "type": "string",
-          "description": "Object key inside the R2 bucket, for operational reference."
+          "description": "Object key inside the R2 bucket. REQUIRED as of fix-cycle-1 (was optional) — needed to verify artifact-identity binding against plugin_id; convention: plugins/<plugin_id>/<version>/<sha256>.tar.gz."
         }
       }
     },

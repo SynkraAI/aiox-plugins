@@ -14,8 +14,8 @@ explanation; the JSON Schema is the source of truth.
 | `version` | yes | Semver of the plugin package (not of the schema). |
 | `tiers` | yes | The tier vocabulary this plugin accepts. **Source of truth is the plugin's own manifest** (D21) — an entry whose `tiers` don't match what the manifest declares is a publish-time failure, not a schema violation this file alone can catch. |
 | `digest` | yes | `{ algorithm: "sha256", value: <64 hex chars> }` of the exact bytes mirrored in R2. A client MUST recompute this after download and refuse to install on mismatch (AC4). |
-| `artifact.mirror_url` | yes | Public URL in AIOX-operated R2 — see `CATALOG-AND-MIRROR.md`. Never a pointer back into the author's own repository (that dependency is exactly what D22 removes). |
-| `artifact.r2_key` | no | Operational convenience — the object key inside the bucket. |
+| `artifact.mirror_url` | yes | Public URL in AIOX-operated R2 — see `CATALOG-AND-MIRROR.md`. Never a pointer back into the author's own repository (that dependency is exactly what D22 removes). **MUST contain the entry's own `plugin_id` as an exact path segment** — enforced in code (`lib/entry-schema.mjs::checkArtifactBinding`, fix-cycle-1), because AC4's digest check protects byte-integrity but not *identity*-binding: nothing else stops an entry from pointing at a different plugin's artifact. |
+| `artifact.r2_key` | **yes** (was optional; tightened fix-cycle-1) | The object key inside the bucket. Required because the identity-binding check above needs it — convention: `plugins/<plugin_id>/<version>/<sha256>.tar.gz`. |
 | `publisher.subject` | yes | The entitlement subject that published this entry (D22). Never a GitHub handle — publishing is itself an entitlement (D16). |
 | `published_at` | yes | ISO-8601 timestamp. |
 | `license.spdx_or_path` | yes | SPDX id or in-package path to the license found at the package root, checked at publish (D24(c)). |

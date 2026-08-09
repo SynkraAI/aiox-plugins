@@ -6,7 +6,7 @@ a real entry into `index/index.json` — the boundary the story's dispatch expli
 creating the repo and structuring the pipeline is authorized; a real published entry is not, until
 `055.W3.3`'s CI invariants exist.
 
-Both entries below are written by running `publisher/publish.mjs` against `--target
+All entries below are written by running `publisher/publish.mjs` against `--target
 fixtures/index.json` — never by hand — which is the literal thing AC6 requires ("produced by the
 pipeline, not by hand").
 
@@ -19,11 +19,25 @@ pipeline, not by hand").
   literal requirement that "the first part [plugin #0] publishes through the same pipeline as the
   third [a real third-party plugin]" — here demonstrated with #0 and #1, the two parts available
   at this stage of the épico.
+- **`acme-hostile-fixture`** (adversarial, added fix-cycle-1) — an intentionally hostile manifest:
+  its `name`/`description`/`tiers`/`license`/`overlay.shadows` reason and the `--subject` it was
+  published with all carry raw HTML (`<script>`, `<img onerror=...>`), unescaped Markdown control
+  characters (`` ` ``, `*`, `|`, `]`/`(`), and an embedded newline that attempts to open a fake
+  top-level heading and a fake blockquote line. Proves `scripts/render-catalog.mjs`'s sanitization
+  (`F-CR-PLUGINS-5`, QG `@architect` 2026-08-09): `fixtures/CATALOG.md` renders every one of those
+  payloads as **inert literal text** — no raw `<script>`/`<img>` tag survives, no fake heading line,
+  no broken table row. Verified mechanically, not just visually — see the handoff for the exact
+  `grep` commands.
 
-Both fixture entries point at the **same** mirrored fixture artifact in R2
-(`plugins-fixtures/sinkra-os/0.0.0-fixture/…`) to avoid uploading a second throwaway object. That
-is a fixture-only shortcut — documented here so it is never mistaken for the real convention (one
-distinct object per plugin+version), which `docs/CATALOG-AND-MIRROR.md` describes.
+Each entry now points at its **own**, distinctly-namespaced fixture artifact in R2
+(`plugins-fixtures/<plugin_id>/0.0.0-fixture/<sha256>.tar.gz` — same underlying bytes reused across
+all three objects to avoid uploading throwaway content three times over, but three DISTINCT R2 keys,
+one per `plugin_id`). This is fix-cycle-1's correction of `F-AC6-ARTIFACT-BINDING`: the ORIGINAL
+version of this fixture set had `aiox-enterprise`'s entry pointing at a `sinkra-os/…` key — legal
+under the old code, and exactly the bug `lib/entry-schema.mjs::checkArtifactBinding` now refuses at
+publish time. Byte-content reuse across distinct, correctly-namespaced keys remains a fixture-only
+shortcut, documented so it is never mistaken for the real convention (one distinct **object** per
+plugin+version), which `docs/CATALOG-AND-MIRROR.md` describes.
 
 Render this fixture index as a human-readable catalog page with:
 

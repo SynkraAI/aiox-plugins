@@ -23,12 +23,15 @@ node publisher/publish.mjs \
   --target fixtures/index.json \
   --subject acct_example \
   --artifact path/to/plugin-artifact.tar.gz \
-  --mirror-url https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins-fixtures/... \
-  --r2-key plugins-fixtures/...
+  --mirror-url https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins/<plugin_id>/<version>/<sha256>.tar.gz \
+  --r2-key plugins/<plugin_id>/<version>/<sha256>.tar.gz
 ```
 
 `--artifact` computes the digest locally from the given file. If the artifact was already uploaded
-and you only have its digest, pass `--digest <sha256> --mirror-url <url>` instead.
+and you only have its digest, pass `--digest <sha256>` instead of `--artifact`. `--mirror-url` and
+`--r2-key` are **both required** (fix-cycle-1) — `<plugin_id>` in the two paths above MUST be an
+exact match of the `plugin_id` inside `--manifest`, or the publish is refused (see "What this script
+checks" below).
 
 `plugin-manifest.json` shape (the input this script expects, distinct from the OUTPUT index entry
 shape in `schema/index-entry.schema.json`):
@@ -49,8 +52,17 @@ shape in `schema/index-entry.schema.json`):
 
 ## What this script checks (base pipeline — see the header comment for the full boundary)
 
+All checks live in `../lib/entry-schema.mjs`, shared with `scripts/validate-index.mjs` (the CI
+gate) so publish-time and CI-time checks can never drift apart:
+
 - Structural schema validation (mirrors `schema/index-entry.schema.json` without a schema-library
   dependency).
+- **Artifact-identity binding (fix-cycle-1, `F-AC6-ARTIFACT-BINDING`):** `artifact.mirror_url` and
+  `artifact.r2_key` must each contain the entry's own `plugin_id` as an exact path segment. AC4's
+  digest check protects byte-integrity; this protects a different property — that the pointer
+  actually points at THIS plugin's artifact, not some other plugin's. Demonstrated concretely: this
+  check is what catches the exact mistake this repo's own fixture set originally shipped
+  (`aiox-enterprise`'s entry pointing at a `sinkra-os/…` key).
 - A minimal D24 guard: refuses to silently overwrite an existing `plugin_id`+`version` with a
   different digest.
 - `overlay.shadows` reasons must be non-empty (D23) — an empty/missing reason is refused, not
