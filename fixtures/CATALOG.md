@@ -1,6 +1,6 @@
 # Catalog — rendered from `fixtures/index.json`
 
-_3 entries, generated_at: 2026-08-09T15:56:04.279Z_
+_4 entries, generated_at: 2026-08-09T15:59:50.270Z_
 
 ## AIOX Enterprise (fixture) — `aiox-enterprise`@0.0.0-fixture
 
@@ -41,3 +41,13 @@ Proves render-catalog.mjs sanitizes manifest-controlled text (fix-cycle-1, F-CR-
 > declared, visible choice (D23), never an accident:
 >
 > - `review` — Hostile reason: \`code\`, &lt;img src=x onerror=alert(1)&gt;, a \] ( markdown-link-break ) attempt, and a ⏎ newline that tries to start a new blockquote line
+
+## fix-cycle-1 post-protection smoke — `fixcycle1-smoke`@0.0.0-fixture
+
+Confirms publisher/publish.mjs's own git push still succeeds after branch protection was applied to main (F-CR-PLUGINS-7 partial fix). Fixture only.
+
+- Tiers: base
+- Digest: `sha256:9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a`
+- Artifact: https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins-fixtures/fixcycle1-smoke/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz
+- Published by: `acct\_fixture\_devops\_055w31` at 2026-08-09T15:59:50.269Z
+- License: MIT

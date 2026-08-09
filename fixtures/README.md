@@ -28,6 +28,12 @@ pipeline, not by hand").
   payloads as **inert literal text** — no raw `<script>`/`<img>` tag survives, no fake heading line,
   no broken table row. Verified mechanically, not just visually — see the handoff for the exact
   `grep` commands.
+- **`fixcycle1-smoke`** — a trivial 4th entry, published by `publisher/publish.mjs` (with its own
+  `git commit`+`git push`, not a manual git command) immediately AFTER branch protection was applied
+  to `main` (`F-CR-PLUGINS-7` partial fix). Its only purpose is proof: the pipeline's own automated
+  push still succeeds under the new protection — `required_pull_request_reviews` was deliberately
+  left off precisely so this would keep working. See `README.md`'s "Repository hygiene" section for
+  the exact protection settings.
 
 Each entry now points at its **own**, distinctly-namespaced fixture artifact in R2
 (`plugins-fixtures/<plugin_id>/0.0.0-fixture/<sha256>.tar.gz` — same underlying bytes reused across
