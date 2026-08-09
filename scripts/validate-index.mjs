@@ -3,10 +3,15 @@
 //
 // Imports the SAME validation publisher/publish.mjs applies at write time (lib/entry-schema.mjs),
 // re-run over a whole index file so CI catches a hand-edit that bypassed the pipeline entirely, or
-// drift between the schema doc and the data. The FULL D20/D24 invariant suite (secret scanning,
-// capability analysis, id-immutability history, burned-name ledger, license-in-tarball check) is
-// story 055.W3.3 / Wave 4 — this is deliberately just the base structural + identity-binding gate
-// this story owns.
+// drift between the schema doc and the data. This file is deliberately just the base structural +
+// identity-binding gate — it does NOT itself run id-immutability/burned-name/license checks.
+//
+// fix-cycle-1 (QG round 1, F7 — this comment was stale): the D24 invariant suite (id-immutability
+// history, burned-name ledger, license-in-package-root) and D21's publish-time tier check landed in
+// story 055.W3.3, but wired into SEPARATE scripts (scripts/check-ledger-append-only.mjs,
+// scripts/check-ledger-consistency.mjs) and publisher/publish.mjs — not into this file. Secret
+// scanning (D20(1)) and capability analysis (D20(4)) genuinely remain future work
+// (055.W4.1/055.W4.2), unwired anywhere.
 //
 // fix-cycle-1 (055.W3.1 QG @architect, F-AC6-ARTIFACT-BINDING): now also runs checkArtifactBinding
 // per entry (imported, not reimplemented) so a hand-edited index that skips publish.mjs can't slip

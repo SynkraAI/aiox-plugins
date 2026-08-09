@@ -163,10 +163,16 @@ function main() {
   if (args.push) {
     // Direct commit + push. No PR (AC5) — this is a service writing its own repository, not a
     // human proposing a change for review.
+    //
+    // fix-cycle-1 (QG round 1, F4): `--only` + a `--` pathspec scopes the commit to EXACTLY
+    // args.target/args.ledger, disregarding anything else that might already be staged in the
+    // working directory at commit time — harmless in a clean checkout (the normal case), but this
+    // pipeline pushes straight to `main` with no PR review as its only safety net (D22), so the
+    // commit's own scope is the only remaining guard against sweeping in stray staged content.
     execFileSync("git", ["add", args.target, args.ledger], { stdio: "inherit" });
     execFileSync(
       "git",
-      ["commit", "-m", `feat(catalog): publish ${entry.plugin_id}@${entry.version} via pipeline`],
+      ["commit", "--only", "-m", `feat(catalog): publish ${entry.plugin_id}@${entry.version} via pipeline`, "--", args.target, args.ledger],
       { stdio: "inherit" },
     );
     execFileSync("git", ["push"], { stdio: "inherit" });

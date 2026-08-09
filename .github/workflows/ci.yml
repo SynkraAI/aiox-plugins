@@ -29,6 +29,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # fix-cycle-1 (QG round 1, F5): standard CI hardening — the checkout token has no reason
+          # to persist in the job's local git config once checkout is done (this job never pushes).
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

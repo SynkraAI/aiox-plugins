@@ -73,10 +73,13 @@ function main() {
   );
 
   if (args.push) {
+    // fix-cycle-1 (QG round 1, F4): scope the commit to EXACTLY args.target/args.ledger via
+    // `--only` + a `--` pathspec — see publish.mjs's identical fix for the full reasoning (this
+    // pipeline pushes straight to `main` with no PR review as its only safety net, D22).
     execFileSync("git", ["add", args.target, args.ledger], { stdio: "inherit" });
     execFileSync(
       "git",
-      ["commit", "-m", `chore(catalog): retire ${args["plugin-id"]} — name burned permanently (D24(b))`],
+      ["commit", "--only", "-m", `chore(catalog): retire ${args["plugin-id"]} — name burned permanently (D24(b))`, "--", args.target, args.ledger],
       { stdio: "inherit" },
     );
     execFileSync("git", ["push"], { stdio: "inherit" });
