@@ -21,17 +21,28 @@ codebase from the product, with its own credentials, never touching `aiox-gh`.
 node publisher/publish.mjs \
   --manifest path/to/plugin-manifest.json \
   --target fixtures/index.json \
+  --ledger ledger/plugin-ids.json \
   --subject acct_example \
   --artifact path/to/plugin-artifact.tar.gz \
   --mirror-url https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins/<plugin_id>/<version>/<sha256>.tar.gz \
-  --r2-key plugins/<plugin_id>/<version>/<sha256>.tar.gz
+  --r2-key plugins/<plugin_id>/<version>/<sha256>.tar.gz \
+  [--emit-tiers base,pro]
 ```
 
-`--artifact` computes the digest locally from the given file. If the artifact was already uploaded
-and you only have its digest, pass `--digest <sha256>` instead of `--artifact`. `--mirror-url` and
-`--r2-key` are **both required** (fix-cycle-1) — `<plugin_id>` in the two paths above MUST be an
-exact match of the `plugin_id` inside `--manifest`, or the publish is refused (see "What this script
-checks" below).
+**`--artifact` is REQUIRED as of story `055.W3.3`** (was one of two alternatives with `--digest`,
+`055.W3.1`) — it computes the digest locally from the given file, and the file itself is opened to
+verify a license exists at its package root (check c, D24(c); a digest alone cannot prove what a
+tarball contains). If `--digest` is also passed, it is now a cross-check against the digest computed
+from `--artifact` (must match, or the publish is refused), not an alternative input mode.
+`--mirror-url` and `--r2-key` are **both required** (fix-cycle-1) — `<plugin_id>` in the two paths
+above MUST be an exact match of the `plugin_id` inside `--manifest`, or the publish is refused (see
+"What this script checks" below). **`--ledger` is REQUIRED as of `055.W3.3`** — the persistent,
+append-only registry (`../lib/ledger.mjs`) that checks (a)/(b) read and write; `--target` and
+`--ledger` are always committed+pushed together in the same commit when `--no-push` is absent.
+**`--emit-tiers <csv>`, new and optional (`055.W3.3`, `AC8`):** the tiers this specific publish
+actually enables — defaults to the manifest's own `tiers` (full vocabulary) when omitted, so every
+pre-`055.W3.3` invocation shape still works unchanged. See `../docs/INVARIANTS.md` for why this flag
+exists (it's what makes check (d) non-tautological).
 
 `plugin-manifest.json` shape (the input this script expects, distinct from the OUTPUT index entry
 shape in `schema/index-entry.schema.json`):
@@ -72,20 +83,30 @@ gate) so publish-time and CI-time checks can never drift apart:
   different digest.
 - `overlay.shadows` reasons must be non-empty (D23) — an empty/missing reason is refused, not
   silently accepted.
+- **Id immutability via digest lineage (`055.W3.3`, check a, D24(a)):** refuses a publish whose
+  artifact bytes were already recorded under a DIFFERENT `plugin_id`. See `../docs/INVARIANTS.md`
+  for the explicitly-named scope of what this does and does not catch.
+- **Burned-name rejection (`055.W3.3`, check b, D24(b)):** refuses a publish under a `plugin_id`
+  the ledger has marked `retired` — see `../publisher/retire.mjs` and `../docs/INVARIANTS.md`.
+- **License-in-package-root (`055.W3.3`, check c, D24(c)):** opens the artifact tarball
+  (`../lib/license-check.mjs`) and requires a LICENSE/LICENCE/COPYING file at the true package root.
+- **Tier vocabulary from the manifest (`055.W3.3`, check d, `AC8`, D21 publish-time half):** refuses
+  a publish whose `--emit-tiers` includes a tier the manifest itself doesn't declare, naming both the
+  invalid tier and the valid vocabulary.
 
-All of the above are covered by automated tests (`../test/`, `node --test test/*.test.mjs`,
-Node's built-in `node:test` — zero new dependency), wired into `.github/workflows/ci.yml` so they
-run on every push (fix-cycle-2, closing the QG's "zero automated tests" finding).
+All of the above are BLOCKING, unconditionally — no flag/env var/branch disables any of them
+(AC4/AC6; see the story's handoff for the literal bypass-grep command + output).
+
+All checks are covered by automated tests (`../test/`, `node --test test/*.test.mjs`, Node's
+built-in `node:test` — zero new dependency), wired into `.github/workflows/ci.yml` so they run on
+every push.
 
 ## What it deliberately does NOT check yet
 
-The three CI-enforced invariants of D24 (full immutable-`id` history, the burned-name ledger across
-retirement, and a mechanical open-the-tarball license check) are story `055.W3.3`'s CI, layered on
-top of this same repository. This script's guard is intentionally the minimum this story can
-honestly claim — see its header comment. Two named, accepted residuals of the artifact-binding
-check itself (LOW severity, `055.W3.3`-adjacent, deliberately not fixed this cycle):
-`plugin_id` need only appear *somewhere* in the path, not at the canonical position
+Two named, accepted residuals of the artifact-binding check itself (LOW severity, deliberately not
+fixed): `plugin_id` need only appear *somewhere* in the path, not at the canonical position
 (`F-BINDING-POSITION-AGNOSTIC`); and the freely-typed `name` field can carry Unicode look-alike
-characters (`F-HOMOGLYPH-NAME`, belongs to `055.W3.3`'s already-open `O4`). Both are pinned as
+characters (`F-HOMOGLYPH-NAME`, belongs to the still-open `O4` curation question). Both are pinned as
 explicit regression tests in `../test/entry-schema.test.mjs` so the current, accepted behavior is a
-deliberate choice, not silent drift.
+deliberate choice, not silent drift. D20(1)/(2)/(4) — blocking secret scanning, capability analysis,
+version pinning — remain `055.W4.1`/`055.W4.2`, not built here.

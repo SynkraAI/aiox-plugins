@@ -50,3 +50,19 @@ Render this fixture index as a human-readable catalog page with:
 ```bash
 node ../scripts/render-catalog.mjs fixtures/index.json fixtures/CATALOG.md
 ```
+
+## Doc pass (VC-7, `055.W3.3`): these fixture names do not burn against the persistent ledger
+
+Story `055.W3.3` adds `ledger/plugin-ids.json` — a persistent, append-only registry of every
+`plugin_id` ever published, which is what makes the "burned name" invariant (check b, D24(b)) real
+(see `../docs/INVARIANTS.md`). The four `plugin_id`s in this fixture file (`aiox-enterprise`,
+`sinkra-os`, `acme-hostile-fixture`, `fixcycle1-smoke`) were all published **before** that ledger
+existed, via the `055.W3.1`/fix-cycle publish runs — they were never ledger-recorded, and the
+`test/publish-cli.test.mjs`/`test/entry-schema.test.mjs` suites that exercise the *same* names always
+run with `--no-push` against a throwaway temp `ledger.json`, never the real
+`ledger/plugin-ids.json` at the repo root. Concretely: none of these names are burned, retired, or
+otherwise "used up" against the real ledger — a future real publish under `aiox-enterprise` (should
+one ever be authorized) would not be refused by check (a) or (b) because of anything in this
+directory. This was already true by construction before `055.W3.3` (no ledger existed for these
+fixtures to touch); it is stated explicitly here because the `055.W3.1` handoff routed this doc pass
+to `055.W3.3` rather than leaving it undocumented.

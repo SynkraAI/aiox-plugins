@@ -12,7 +12,11 @@ import {
   checkNoConflictingDuplicate,
   validateEntryFull,
   ALLOWED_ARTIFACT_HOSTS,
+  checkIdImmutabilityAgainstLedger,
+  checkNameNotBurned,
+  checkTierVocabulary,
 } from "../lib/entry-schema.mjs";
+import { EMPTY_LEDGER, recordPublish, retirePlugin } from "../lib/ledger.mjs";
 
 const DIGEST = "9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a";
 const GOOD_HOST = "pub-42179e62dc3040138151ec33229dd073.r2.dev";
@@ -182,6 +186,75 @@ describe("checkNoConflictingDuplicate (D24(a)/(b) minimal guard)", () => {
   test("same plugin_id, different version: no conflict", () => {
     const existing = [validEntry({ version: "0.0.1-fixture" })];
     assert.deepEqual(checkNoConflictingDuplicate(existing, validEntry({ version: "0.0.2-fixture" })), []);
+  });
+});
+
+describe("checkIdImmutabilityAgainstLedger (check a, story 055.W3.3, digest-lineage design)", () => {
+  test("a genuinely new digest never seen under another plugin_id: no errors", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    recordPublish(ledger, { plugin_id: "sinkra-os", version: "1.0.0", digest: "unrelated-digest", published_at: "t1" });
+    assert.deepEqual(checkIdImmutabilityAgainstLedger(ledger, validEntry()), []);
+  });
+
+  test("the same digest already recorded under a DIFFERENT plugin_id is REFUSED, naming both ids", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    recordPublish(ledger, { plugin_id: "sinkra-os", version: "1.0.0", digest: DIGEST, published_at: "t1" });
+    const errs = checkIdImmutabilityAgainstLedger(ledger, validEntry({ plugin_id: "aiox-enterprise" }));
+    assert.equal(errs.length, 1);
+    assert.match(errs[0], /"aiox-enterprise"/);
+    assert.match(errs[0], /"sinkra-os"/);
+  });
+
+  test("the same digest recorded under the SAME plugin_id's own history is not a self-conflict", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    recordPublish(ledger, { plugin_id: "aiox-enterprise", version: "1.0.0", digest: DIGEST, published_at: "t1" });
+    assert.deepEqual(checkIdImmutabilityAgainstLedger(ledger, validEntry({ plugin_id: "aiox-enterprise" })), []);
+  });
+});
+
+describe("checkNameNotBurned (check b, story 055.W3.3 — the registry survives entry removal, VC-1)", () => {
+  test("an active (never retired) plugin_id: no errors", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    recordPublish(ledger, { plugin_id: "aiox-enterprise", version: "1.0.0", digest: DIGEST, published_at: "t1" });
+    assert.deepEqual(checkNameNotBurned(ledger, validEntry()), []);
+  });
+
+  test("a retired plugin_id is REFUSED, naming when it was retired", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    recordPublish(ledger, { plugin_id: "aiox-enterprise", version: "1.0.0", digest: DIGEST, published_at: "t1" });
+    retirePlugin(ledger, { plugin_id: "aiox-enterprise", reason: "spam", retired_at: "t9" });
+    const errs = checkNameNotBurned(ledger, validEntry());
+    assert.equal(errs.length, 1);
+    assert.match(errs[0], /retired at t9/);
+    assert.match(errs[0], /burned forever/);
+  });
+
+  test("a plugin_id the ledger has never heard of: no errors (not every publish is a retirement attempt)", () => {
+    const ledger = structuredClone(EMPTY_LEDGER);
+    assert.deepEqual(checkNameNotBurned(ledger, validEntry()), []);
+  });
+});
+
+describe("checkTierVocabulary (check d / AC8, story 055.W3.3, publish-time half of D21, VC-5)", () => {
+  test("emitting exactly the manifest's declared vocabulary: no errors", () => {
+    assert.deepEqual(checkTierVocabulary(["mapear", "forjar"], ["mapear", "forjar"], "sinkra-os"), []);
+  });
+
+  test("emitting a strict subset of the manifest's vocabulary: no errors", () => {
+    assert.deepEqual(checkTierVocabulary(["mapear"], ["mapear", "forjar"], "sinkra-os"), []);
+  });
+
+  test("emitting a tier NOT in the manifest's vocabulary is REFUSED, naming the invalid tier AND the valid ones", () => {
+    const errs = checkTierVocabulary(["forjarr"], ["mapear", "forjar"], "sinkra-os");
+    assert.equal(errs.length, 1);
+    assert.match(errs[0], /"forjarr"/);
+    assert.match(errs[0], /"mapear"/);
+    assert.match(errs[0], /"forjar"/);
+  });
+
+  test("a manifest with an empty tier vocabulary refuses any emitted tier, and says so explicitly", () => {
+    const errs = checkTierVocabulary(["base"], [], "x");
+    assert.match(errs[0], /manifest declares no tiers/);
   });
 });
 

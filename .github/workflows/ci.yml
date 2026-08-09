@@ -1,14 +1,17 @@
 name: ci
 
-# Base CI for the catalog repo (story 055.W3.1). This is scaffolding, NOT the full control suite:
-# - D20(1) blocking secret scanning + D20(4) capability analysis: story 055.W4.1 / 055.W4.2.
-# - D24's full invariant suite (immutable-id history, burned-name ledger, license-in-tarball check
-#   run against the real artifact): story 055.W3.3.
-# What this workflow DOES check: the automated unit test suite (test/*.test.mjs, node:test — added
-# fix-cycle-2, closing the QG's "zero automated tests" finding), the index files are structurally
-# valid against the documented schema, and no committed file contains an obvious secret shape or a
-# machine-specific absolute path (this repo's own portable-paths rule, mirrored from the product
-# repo's).
+# Base CI for the catalog repo (story 055.W3.1) + D24's full invariant suite (story 055.W3.3):
+# - D20(1) blocking secret scanning + D20(4) capability analysis: still story 055.W4.1 / 055.W4.2,
+#   not built here.
+# - D24's three no-going-back invariants (immutable id via digest lineage, burned-name ledger,
+#   license-in-package-root) + the publish-time half of D21 (tier vocabulary from the plugin's own
+#   manifest) — ADDED this story. See docs/INVARIANTS.md for the full design reasoning.
+# What this workflow checks: the automated unit test suite (test/*.test.mjs, node:test — includes
+# every negative fixture proving each of the 4 checks actually rejects the case it's meant to
+# reject, AC5), the index files are structurally valid against the documented schema, the ledger's
+# entire git history is append-only (VC-1), the production index is ledger-consistent, no committed
+# file contains an obvious secret shape or a machine-specific absolute path, and the production
+# index still ships with zero real entries (until this repo's dispatch explicitly authorizes one).
 
 on:
   push:
@@ -19,19 +22,33 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — REQUIRED for the ledger append-only check (scripts/check-ledger-append-
+      # only.mjs) to see the file's ENTIRE commit history, not just the tip. A shallow clone would
+      # silently see 1 commit and report a false OK — exactly the "gate that passes verde without
+      # pegging what it should" trap this story exists to avoid.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Unit tests (node:test — lib/entry-schema.mjs, publish.mjs CLI, render-catalog.mjs, validate-index.mjs)
+      - name: Unit tests (node:test — lib/, publish.mjs + retire.mjs CLIs, render-catalog.mjs, validate-index.mjs, ledger checks)
         run: |
           node --test test/*.test.mjs
 
       - name: Validate index files against the schema (structural)
         run: |
           node scripts/validate-index.mjs index/index.json fixtures/index.json
+
+      - name: Ledger is append-only across its ENTIRE git history (VC-1, D24 a/b)
+        run: |
+          node scripts/check-ledger-append-only.mjs ledger/plugin-ids.json
+
+      - name: Production index is consistent with the ledger (D24 a/b, structural re-check independent of publish-time)
+        run: |
+          node scripts/check-ledger-consistency.mjs index/index.json ledger/plugin-ids.json
 
       - name: Production index ships with zero real entries (VC-5 / this story's boundary)
         run: |

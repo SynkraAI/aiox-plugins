@@ -17,11 +17,17 @@ catalog side of those decisions; the Cockpit-side consumer lives in the product 
 | `schema/index-entry.schema.json` | The versioned schema every index entry MUST conform to (AC2) | Enforced by CI (structural check) |
 | `index/index.json` | **The production index.** Ships **empty** — see "Why the production index is empty" below | No real entries yet |
 | `fixtures/` | A **non-production** index + artifact used only to prove the publish pipeline works end-to-end | Test data, never consumed by a real client |
-| `publisher/` | The publish pipeline itself — an AIOX-operated service, **not** a human PR workflow (AC5, D22) | Base pipeline (v1) |
-| `lib/entry-schema.mjs` | Shared validation (shape, artifact-identity binding, artifact-host allowlist, D24 duplicate guard) — imported by BOTH `publisher/publish.mjs` and `scripts/validate-index.mjs` | Enforced publish-time AND in CI |
-| `test/` | Automated unit tests (`node:test`, zero dependency) for `lib/`, the `publish.mjs` CLI, and `render-catalog.mjs` | Run on every push (`ci.yml`) |
+| `publisher/` | The publish pipeline (`publish.mjs`) and the despublish pipeline (`retire.mjs`) — both AIOX-operated services, **not** a human PR workflow (AC5, D22) | Full D24 invariant suite wired in (`055.W3.3`) |
+| `lib/entry-schema.mjs` | Shared validation (shape, artifact-identity binding, artifact-host allowlist, id-immutability, burned-name, tier-vocabulary) — imported by BOTH `publisher/publish.mjs` and `scripts/validate-index.mjs`/`scripts/check-ledger-consistency.mjs` | Enforced publish-time AND in CI |
+| `lib/license-check.mjs` | Opens the artifact tarball and verifies a license file at the package root (D24(c)) | Enforced publish-time |
+| `lib/ledger.mjs` | The persistent, append-only registry of every `plugin_id` ever published (`ledger/plugin-ids.json`) — survives an index entry's removal (VC-1) | — |
+| `ledger/plugin-ids.json` | The ledger itself. Ships with zero real plugins, matching the production index | Append-only, proved across its entire git history |
+| `scripts/check-ledger-append-only.mjs` | CI proof that the ledger's git history never removed/mutated an existing record | Run on every push |
+| `scripts/check-ledger-consistency.mjs` | CI structural re-check of id-immutability/burned-name against `index/index.json`, independent of publish-time | Run on every push |
+| `test/` | Automated unit tests (`node:test`, zero dependency) for `lib/`, the `publish.mjs`/`retire.mjs` CLIs, `render-catalog.mjs`, and the ledger checks | Run on every push (`ci.yml`) |
 | `docs/CATALOG-AND-MIRROR.md` | How the index, the R2 artifact mirror, and the publish pipeline fit together | — |
 | `docs/SCHEMA.md` | Field-by-field explanation of the index entry schema | — |
+| `docs/INVARIANTS.md` | The four no-going-back invariants (D24 a/b/c + D21's `AC8`), how each is verified, and the explicitly-named design boundaries | — |
 
 ## Testing
 
@@ -41,20 +47,33 @@ empty (VC-5). Wired into `.github/workflows/ci.yml`, runs on every push and PR.
 
 Three invariants have to exist **before** the first real publication, because they are
 irreversible after it (D24): the plugin `id` becomes immutable, an unpublished name gets burned
-forever, and a license becomes mandatory at the package root. The CI that **verifies** those three
-invariants mechanically lives in a follow-up story (`055.W3.3`) and has not landed yet in this
-repo's history at the time this scaffolding was created. Publishing a real entry before that CI
-exists would invert the order the design itself requires. This repo's `index/index.json` therefore
-ships with zero entries; `fixtures/index.json` proves the pipeline against disposable data instead.
+forever, and a license becomes mandatory at the package root. A fourth, the publish-time half of
+D21 (`AC8`), was moved into the same story so a typo'd tier fails at publish, not on a paying
+client's machine. The CI that **verifies** all four now exists (`055.W3.3` — see
+`docs/INVARIANTS.md`), but the first real publication is still a deliberate, separate authorization
+this story's own dispatch did not grant: `index/index.json` therefore continues to ship with zero
+entries; `fixtures/index.json` proves the pipeline against disposable data instead.
 
 ## Identity: who can publish
 
 The right to publish is itself an entitlement (D16). The identity recorded on every entry is the
 **entitlement subject** (`publisher.subject`) — never a GitHub handle — because it is the same
 mechanism that already proves payment and provisioning. See `publisher/README.md` for how the
-pipeline is invoked and what it assumes about that identity today. (Nothing in this repository
-prunes, removes, or acts on a published entry based on that identity — see AC8 in
-`docs/CATALOG-AND-MIRROR.md`.)
+pipeline is invoked and what it assumes about that identity today. (`publisher/retire.mjs`,
+`055.W3.3`, is the one deliberate exception to "nothing removes an entry" — see "Despublishing" below
+and `docs/INVARIANTS.md`; it does not act on identity, and it is distinct from the automatic index-
+freshness/expiry mechanism of D20(5), which still does not exist — see "What this repo does NOT do
+(yet)".)
+
+## Despublishing (`publisher/retire.mjs`, `055.W3.3`)
+
+`retire.mjs` removes a `plugin_id`'s entry from a target index file AND, in the same operation,
+flips that `plugin_id`'s record in `ledger/plugin-ids.json` to `status: "retired"` — see
+`docs/INVARIANTS.md` "Check (b)" for why both writes always happen together. This is a **manual,
+explicit** operation with a mandatory `--reason`; it is not the automatic index-freshness/expiry
+mechanism of D20(5) (still `055.W5.1`, still does not exist) — retiring a plugin here is a deliberate
+act by whoever operates the pipeline, not something the system does on its own on a schedule or a
+version pin.
 
 ## No PR flow, by design
 
@@ -98,9 +117,13 @@ repo never referencing the product repo, AC1).
 
 ## What this repo does NOT do (yet)
 
-- It does not describe or perform pruning, removal, or revocation of a published entry. That
-  capability (index freshness + monotonic version, D20(5)) is scoped to a later story
-  (`055.W5.1`) and does not exist here. Nothing in this repo should be read as claiming otherwise.
+- It does not perform *automatic* pruning, removal, or revocation of a published entry based on
+  freshness/staleness. That capability (index freshness + monotonic version, D20(5)) is scoped to a
+  later story (`055.W5.1`) and does not exist here. What this repo DOES have, as of `055.W3.3`, is
+  `publisher/retire.mjs` — a manual, explicit despublish operation with a mandatory reason, needed to
+  make check (b)'s "burned name" invariant provable at all (see "Despublishing" above and
+  `docs/INVARIANTS.md`). Neither retirement nor anything else here acts based on entitlement/identity
+  — see the "Identity" section above.
 - It does not sign the index. Signing (D20(3)) is a separate story (`055.W4.3`) with its own key
   material, deliberately kept in a vault separate from the entitlement signing key.
 - It does not run the secret-scanning / capability-analysis / version-pin checks of D20(1)(2)(4).

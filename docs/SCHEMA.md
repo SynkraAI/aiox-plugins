@@ -3,6 +3,12 @@
 Canonical, machine-checked definition: `schema/index-entry.schema.json`. This file is the human
 explanation; the JSON Schema is the source of truth.
 
+The entry SHAPE below is unchanged by story `055.W3.3` — no new field was added. What changed is
+what gets VERIFIED before an entry with this shape is allowed to land: see `INVARIANTS.md` for the
+four no-going-back invariants (D24 a/b/c + D21's publish-time tier check) now enforced in CI, and
+why each one is designed the way it is (in particular, why `tiers` and `license.spdx_or_path` needed
+no new field to become non-tautologically checkable).
+
 ## Field-by-field
 
 | Field | Required | Notes |

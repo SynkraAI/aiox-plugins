@@ -54,11 +54,15 @@ Real result recorded in the story's Dev Agent Record / handoff to `@devops`'s re
 recomputed digest **exactly equal** to the uploaded digest
 (`9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a`).
 
-## AC8 — nothing here claims revocation exists
+## AC8 (`055.W3.1`) — automatic revocation still does not exist; manual despublish does (`055.W3.3`)
 
-This document, this repository's README, and every generated catalog page describe **installation
-and publication only**. None of them describe pruning, removal, or revocation as existing
-behavior. That capability is `055.W5.1` (D20(5), index freshness + monotonic version) and is not
-built here. If you are editing this repo and about to write the word "revoke"/"prune"/"remove" as
-something the system *does*, stop — check whether `055.W1.3`'s `O5` reconciliation and `055.W5.1`
-have actually landed first.
+This document, this repository's README, and every generated catalog page describe installation and
+publication, plus — as of `055.W3.3` — one narrow, explicit, manual capability:
+`publisher/retire.mjs` removes an index entry and burns its `plugin_id` in `ledger/plugin-ids.json`
+forever (D24(b)), triggered only by an operator running the script with a mandatory `--reason`. None
+of this repo describes *automatic* pruning, removal, or revocation based on freshness, staleness, or
+entitlement — that capability is still `055.W5.1` (D20(5), index freshness + monotonic version) and
+is not built here. If you are editing this repo and about to write the word "revoke"/"prune"/
+"remove" as something the system does **on its own** (not as an explicit, manual, reasoned
+operator action), stop — check whether `055.W1.3`'s `O5` reconciliation and `055.W5.1` have actually
+landed first.
