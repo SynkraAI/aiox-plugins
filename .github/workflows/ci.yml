@@ -4,9 +4,11 @@ name: ci
 # - D20(1) blocking secret scanning + D20(4) capability analysis: story 055.W4.1 / 055.W4.2.
 # - D24's full invariant suite (immutable-id history, burned-name ledger, license-in-tarball check
 #   run against the real artifact): story 055.W3.3.
-# What this workflow DOES check: the index files are structurally valid against the documented
-# schema, and no committed file contains an obvious secret shape or a machine-specific absolute
-# path (this repo's own portable-paths rule, mirrored from the product repo's).
+# What this workflow DOES check: the automated unit test suite (test/*.test.mjs, node:test — added
+# fix-cycle-2, closing the QG's "zero automated tests" finding), the index files are structurally
+# valid against the documented schema, and no committed file contains an obvious secret shape or a
+# machine-specific absolute path (this repo's own portable-paths rule, mirrored from the product
+# repo's).
 
 on:
   push:
@@ -22,6 +24,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Unit tests (node:test — lib/entry-schema.mjs, publish.mjs CLI, render-catalog.mjs, validate-index.mjs)
+        run: |
+          node --test test/*.test.mjs
 
       - name: Validate index files against the schema (structural)
         run: |

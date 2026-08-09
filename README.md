@@ -18,8 +18,24 @@ catalog side of those decisions; the Cockpit-side consumer lives in the product 
 | `index/index.json` | **The production index.** Ships **empty** — see "Why the production index is empty" below | No real entries yet |
 | `fixtures/` | A **non-production** index + artifact used only to prove the publish pipeline works end-to-end | Test data, never consumed by a real client |
 | `publisher/` | The publish pipeline itself — an AIOX-operated service, **not** a human PR workflow (AC5, D22) | Base pipeline (v1) |
+| `lib/entry-schema.mjs` | Shared validation (shape, artifact-identity binding, artifact-host allowlist, D24 duplicate guard) — imported by BOTH `publisher/publish.mjs` and `scripts/validate-index.mjs` | Enforced publish-time AND in CI |
+| `test/` | Automated unit tests (`node:test`, zero dependency) for `lib/`, the `publish.mjs` CLI, and `render-catalog.mjs` | Run on every push (`ci.yml`) |
 | `docs/CATALOG-AND-MIRROR.md` | How the index, the R2 artifact mirror, and the publish pipeline fit together | — |
 | `docs/SCHEMA.md` | Field-by-field explanation of the index entry schema | — |
+
+## Testing
+
+```bash
+node --test test/*.test.mjs
+```
+
+Node's built-in test runner — zero dependency added to a scaffolding repo. Covers: every refusal
+path in `lib/entry-schema.mjs` (artifact-identity binding, artifact-host allowlist, the D24
+duplicate/immutability guard, shape validation), `escapeMd`'s HTML/Markdown/injection neutralization
+plus AC9 legibility for benign input, `renderCatalog`'s positive/negative shadow-warning cases, the
+`publish.mjs` CLI end to end (always with `--no-push` — no test ever runs `git commit`/`git push`),
+`validate-index.mjs`'s CI-side gate, and a regression pin that `index/index.json` (production) stays
+empty (VC-5). Wired into `.github/workflows/ci.yml`, runs on every push and PR.
 
 ## Why the production index is empty
 

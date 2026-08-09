@@ -19,19 +19,29 @@
 // repo.)
 //
 // SCOPE (base pipeline, this story): structural schema validation + artifact-identity binding +
-// a minimal D24 guard (license required, no silent duplicate id+version). The FULL invariant suite
-// (id immutability across the entry's history, burned-name ledger, CI-enforced license check) is
-// story 055.W3.3 — this script deliberately does not pretend to be that story.
+// artifact-host allowlist + a minimal D24 guard (license required, no silent duplicate id+version).
+// The FULL invariant suite (id immutability across the entry's history, burned-name ledger,
+// CI-enforced license check) is story 055.W3.3 — this script deliberately does not pretend to be
+// that story.
 //
 // fix-cycle-1 (055.W3.1 QG @architect, F-AC6-ARTIFACT-BINDING): validation now lives in
 // lib/entry-schema.mjs, shared with scripts/validate-index.mjs, so publish-time and CI-time checks
 // can never drift apart. artifact.r2_key is now REQUIRED (was optional) — it's needed to verify
 // identity-binding, and no real entry has ever shipped that would be broken by tightening this.
+//
+// fix-cycle-2 (F-BINDING-NO-HOST-ALLOWLIST): a correctly plugin_id-namespaced path on a
+// COMPLETELY DIFFERENT HOST used to pass every check. checkArtifactHost (lib/entry-schema.mjs)
+// now refuses any mirror_url whose host isn't in the single named ALLOWED_ARTIFACT_HOSTS list.
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { validateEntryShape, checkArtifactBinding, checkNoConflictingDuplicate } from "../lib/entry-schema.mjs";
+import {
+  validateEntryShape,
+  checkArtifactBinding,
+  checkArtifactHost,
+  checkNoConflictingDuplicate,
+} from "../lib/entry-schema.mjs";
 
 function usageAndExit(msg) {
   if (msg) console.error(`error: ${msg}\n`);
@@ -90,9 +100,10 @@ function main() {
 
   const shapeErrs = validateEntryShape(entry);
   const bindingErrs = checkArtifactBinding(entry);
-  if (shapeErrs.length || bindingErrs.length) {
+  const hostErrs = checkArtifactHost(entry);
+  if (shapeErrs.length || bindingErrs.length || hostErrs.length) {
     console.error("REFUSED — entry fails validation:");
-    for (const e of [...shapeErrs, ...bindingErrs]) console.error(`  - ${e}`);
+    for (const e of [...shapeErrs, ...bindingErrs, ...hostErrs]) console.error(`  - ${e}`);
     process.exit(1);
   }
 

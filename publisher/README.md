@@ -63,14 +63,29 @@ gate) so publish-time and CI-time checks can never drift apart:
   actually points at THIS plugin's artifact, not some other plugin's. Demonstrated concretely: this
   check is what catches the exact mistake this repo's own fixture set originally shipped
   (`aiox-enterprise`'s entry pointing at a `sinkra-os/…` key).
+- **Artifact-host allowlist (fix-cycle-2, `F-BINDING-NO-HOST-ALLOWLIST`):** `artifact.mirror_url`'s
+  host must be one of `ALLOWED_ARTIFACT_HOSTS` (`../lib/entry-schema.mjs`, one named constant, edit
+  it to add a mirror — never scatter a host string anywhere else). Binding alone proves the PATH is
+  right; this proves the artifact is actually served from infrastructure AIOX operates. A
+  correctly-namespaced path on `evil.example.com` used to pass every check before this fix.
 - A minimal D24 guard: refuses to silently overwrite an existing `plugin_id`+`version` with a
   different digest.
 - `overlay.shadows` reasons must be non-empty (D23) — an empty/missing reason is refused, not
   silently accepted.
+
+All of the above are covered by automated tests (`../test/`, `node --test test/*.test.mjs`,
+Node's built-in `node:test` — zero new dependency), wired into `.github/workflows/ci.yml` so they
+run on every push (fix-cycle-2, closing the QG's "zero automated tests" finding).
 
 ## What it deliberately does NOT check yet
 
 The three CI-enforced invariants of D24 (full immutable-`id` history, the burned-name ledger across
 retirement, and a mechanical open-the-tarball license check) are story `055.W3.3`'s CI, layered on
 top of this same repository. This script's guard is intentionally the minimum this story can
-honestly claim — see its header comment.
+honestly claim — see its header comment. Two named, accepted residuals of the artifact-binding
+check itself (LOW severity, `055.W3.3`-adjacent, deliberately not fixed this cycle):
+`plugin_id` need only appear *somewhere* in the path, not at the canonical position
+(`F-BINDING-POSITION-AGNOSTIC`); and the freely-typed `name` field can carry Unicode look-alike
+characters (`F-HOMOGLYPH-NAME`, belongs to `055.W3.3`'s already-open `O4`). Both are pinned as
+explicit regression tests in `../test/entry-schema.test.mjs` so the current, accepted behavior is a
+deliberate choice, not silent drift.
