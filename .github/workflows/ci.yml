@@ -1,0 +1,57 @@
+name: ci
+
+# Base CI for the catalog repo (story 055.W3.1). This is scaffolding, NOT the full control suite:
+# - D20(1) blocking secret scanning + D20(4) capability analysis: story 055.W4.1 / 055.W4.2.
+# - D24's full invariant suite (immutable-id history, burned-name ledger, license-in-tarball check
+#   run against the real artifact): story 055.W3.3.
+# What this workflow DOES check: the index files are structurally valid against the documented
+# schema, and no committed file contains an obvious secret shape or a machine-specific absolute
+# path (this repo's own portable-paths rule, mirrored from the product repo's).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate index files against the schema (structural)
+        run: |
+          node scripts/validate-index.mjs index/index.json fixtures/index.json
+
+      - name: Production index ships with zero real entries (VC-5 / this story's boundary)
+        run: |
+          count=$(node -e "console.log(JSON.parse(require('fs').readFileSync('index/index.json','utf8')).entries.length)")
+          echo "index/index.json entries: $count"
+          if [ "$count" != "0" ]; then
+            echo "REFUSED: index/index.json must stay empty until 055.W3.3's CI invariants land — see README.md 'Why the production index is empty'."
+            exit 1
+          fi
+
+      - name: No obvious secret shapes committed (base guard — NOT the D20(1) blocking scanner)
+        run: |
+          set -e
+          if grep -RInE '(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|CLOUDFLARE_API_TOKEN\s*=\s*[A-Za-z0-9_-]{20,})' \
+              --exclude-dir=.git .; then
+            echo "REFUSED: possible secret shape found in a committed file"
+            exit 1
+          fi
+          echo "OK — no obvious secret shape found"
+
+      - name: No machine-specific absolute paths committed (portable-paths rule)
+        run: |
+          set -e
+          if grep -RInE '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+|C:\\\\Users\\\\' \
+              --exclude-dir=.git .; then
+            echo "REFUSED: machine-specific absolute path found in a committed file"
+            exit 1
+          fi
+          echo "OK — no machine-specific absolute path found"

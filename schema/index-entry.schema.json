@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/SynkraAI/aiox-plugins/blob/main/schema/index-entry.schema.json",
+  "title": "AIOX Plugin Catalog — Index Entry (v1.0.0)",
+  "description": "One entry of the AIOX plugin catalog index (ADR-COCKPIT-ENTERPRISE-PREMIUM-PACK D22). Story 055.W3.1.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "plugin_id",
+    "version",
+    "tiers",
+    "digest",
+    "artifact",
+    "publisher",
+    "published_at",
+    "license"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version of THIS schema, not of the plugin. Bump when the entry shape changes."
+    },
+    "plugin_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Root of the <plugin-id>/<skill> namespace (D23). IMMUTABLE after the first publication (D24(a)) — never reused once a name is retired (D24(b))."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name. May change across versions; plugin_id may not."
+    },
+    "description": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$",
+      "description": "Semantic version of the plugin package."
+    },
+    "tiers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Declared tier vocabulary. Source of truth is the plugin's OWN manifest (D21) — publish fails when the emitted tier does not match what the manifest declares. Not re-validated by this schema alone."
+    },
+    "digest": {
+      "type": "object",
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "type": "string", "const": "sha256" },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "description": "Digest of the mirrored artifact's exact bytes. A client recomputes this after download; it must match."
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["mirror_url"],
+      "additionalProperties": false,
+      "properties": {
+        "mirror_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Public URL of the artifact mirrored in AIOX-operated R2 (D22). Install never depends on the author's own repository."
+        },
+        "r2_key": {
+          "type": "string",
+          "description": "Object key inside the R2 bucket, for operational reference."
+        }
+      }
+    },
+    "publisher": {
+      "type": "object",
+      "required": ["subject"],
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "The entitlement subject that published this entry (D22). Never a GitHub handle — the right to publish is itself an entitlement (D16)."
+        }
+      }
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "license": {
+      "type": "object",
+      "required": ["spdx_or_path"],
+      "additionalProperties": false,
+      "properties": {
+        "spdx_or_path": {
+          "type": "string",
+          "description": "SPDX identifier or in-package path to the license file found at the package root and verified at publish time (D24(c))."
+        }
+      }
+    },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shadows": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "REUSE of the overlay.shadows contract (055.W2.2, OVERLAY-MANIFEST.md in the product repo's SOT). Present only when the plugin declares shadowing one or more base skills. Each key is the shadowed skill's name; each value is the MANDATORY, non-empty reason. Rendered visibly on the catalog entry (AC9, D23) — never hidden in a boot log."
+        }
+      },
+      "description": "Absence of this object, or of `shadows`, means zero declared shadowing for this plugin version."
+    }
+  }
+}
