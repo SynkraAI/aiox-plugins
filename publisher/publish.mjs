@@ -42,11 +42,21 @@
 // `tiers`, so every pre-055.W3.3 invocation shape keeps working unchanged) — see check (d) below.
 // `--ledger <path>` is new and REQUIRED: the persistent, append-only registry (lib/ledger.mjs) that
 // checks (a) and (b) read and write.
+//
+// fix-cycle-2 (F9, founder decision 2026-08-09) — SECOND BREAKING CHANGE to the manifest shape:
+// `manifest.lineage_id` is now REQUIRED. It is the plugin's stable identity (an opaque UUID, minted
+// once, never changed), and it is what makes a plugin_id rename detectable independently of the
+// artifact's bytes — check (a) below. There is deliberately NO auto-mint fallback: if this script
+// invented a lineage_id whenever one was absent, an author who simply forgot to carry the value
+// forward would get a fresh identity and every subsequent rename would pass green, which is the
+// exact defect the field exists to close. Refusing is the only shape of this that is an invariant
+// rather than a warning.
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  ENTRY_SCHEMA_VERSION,
   validateEntryShape,
   checkArtifactBinding,
   checkArtifactHost,
@@ -94,6 +104,16 @@ function main() {
 
   const manifest = JSON.parse(readFileSync(args.manifest, "utf8"));
 
+  // fix-cycle-2 (F9): fail at the usage level, before any work, when the manifest carries no
+  // lineage_id at all — the error has to tell a real publisher what to DO, not just what's missing.
+  // (An lineage_id that is present but malformed is caught by validateEntryShape below, together
+  // with every other shape error, so the operator sees one complete list rather than a drip.)
+  if (!manifest.lineage_id) {
+    usageAndExit(
+      `manifest.lineage_id is required (D24(a), F9) — the plugin's stable identity, which stays the same across every version bump and rebuild so that a plugin_id rename is detectable. For a genuinely NEW plugin, mint one ONCE with \`uuidgen | tr 'A-Z' 'a-z'\` and store it in the manifest forever. For an EXISTING plugin, copy the value already recorded in ${args.ledger}; do not mint a new one.`,
+    );
+  }
+
   const digestFromArtifact = sha256File(args.artifact);
   if (args.digest && args.digest !== digestFromArtifact) {
     console.error(`REFUSED — --digest ${args.digest} does not match the digest computed from --artifact (${digestFromArtifact})`);
@@ -106,8 +126,9 @@ function main() {
     : manifest.tiers;
 
   const entry = {
-    schema_version: "1.0.0",
+    schema_version: ENTRY_SCHEMA_VERSION,
     plugin_id: manifest.plugin_id,
+    lineage_id: manifest.lineage_id,
     name: manifest.name,
     description: manifest.description,
     version: manifest.version,
@@ -152,7 +173,13 @@ function main() {
   index.generated_at = new Date().toISOString();
   writeFileSync(args.target, JSON.stringify(index, null, 2) + "\n");
 
-  recordPublish(ledger, { plugin_id: entry.plugin_id, version: entry.version, digest: entry.digest.value, published_at: entry.published_at });
+  recordPublish(ledger, {
+    plugin_id: entry.plugin_id,
+    lineage_id: entry.lineage_id,
+    version: entry.version,
+    digest: entry.digest.value,
+    published_at: entry.published_at,
+  });
   saveLedger(args.ledger, ledger);
 
   console.log(`OK — ${entry.plugin_id}@${entry.version} appended to ${args.target}; ledger updated (${args.ledger})`);

@@ -1,10 +1,11 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "generated_at": "2026-08-09T15:59:50.270Z",
   "entries": [
     {
-      "schema_version": "1.0.0",
+      "schema_version": "2.0.0",
       "plugin_id": "aiox-enterprise",
+      "lineage_id": "7e0ed5a6-54ec-404f-89cd-da82db759bca",
       "name": "AIOX Enterprise (fixture)",
       "description": "FIXTURE ENTRY (055.W3.1 pipeline proof) — plugin #0 per D15. Not a real production package.",
       "version": "0.0.0-fixture",
@@ -28,8 +29,9 @@
       }
     },
     {
-      "schema_version": "1.0.0",
+      "schema_version": "2.0.0",
       "plugin_id": "sinkra-os",
+      "lineage_id": "0694a4a5-ef8e-4591-8433-3ee949aa4143",
       "name": "SINKRA OS (fixture)",
       "description": "FIXTURE ENTRY (055.W3.1 pipeline proof) — plugin #1 per D15. Not the real sinkra-os bundle (that ships via npm from sinkra-hub).",
       "version": "0.0.0-fixture",
@@ -59,8 +61,9 @@
       }
     },
     {
-      "schema_version": "1.0.0",
+      "schema_version": "2.0.0",
       "plugin_id": "acme-hostile-fixture",
+      "lineage_id": "9649310c-f653-4d9f-9c26-3605737dc53c",
       "name": "Acme *Hostile* <b>Fixture</b>\n# FAKE HEADING",
       "description": "Proves render-catalog.mjs sanitizes manifest-controlled text (fix-cycle-1, F-CR-PLUGINS-5). Contains: <script>alert(1)</script>, a fake heading attempt, and a table-breaking pipe: | x | y |",
       "version": "0.0.0-fixture",
@@ -89,8 +92,9 @@
       }
     },
     {
-      "schema_version": "1.0.0",
+      "schema_version": "2.0.0",
       "plugin_id": "fixcycle1-smoke",
+      "lineage_id": "d87cec05-8098-40e4-827d-417930a10d96",
       "name": "fix-cycle-1 post-protection smoke",
       "description": "Confirms publisher/publish.mjs's own git push still succeeds after branch protection was applied to main (F-CR-PLUGINS-7 partial fix). Fixture only.",
       "version": "0.0.0-fixture",

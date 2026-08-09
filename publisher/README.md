@@ -39,6 +39,10 @@ above MUST be an exact match of the `plugin_id` inside `--manifest`, or the publ
 "What this script checks" below). **`--ledger` is REQUIRED as of `055.W3.3`** — the persistent,
 append-only registry (`../lib/ledger.mjs`) that checks (a)/(b) read and write; `--target` and
 `--ledger` are always committed+pushed together in the same commit when `--no-push` is absent.
+**`manifest.lineage_id` is REQUIRED as of `055.W3.3` fix-cycle-2 (F9)** — it is a manifest field,
+not a CLI flag, precisely because it belongs to the plugin permanently rather than to one
+invocation. A manifest without it is refused at the usage level, with an error that says how to
+mint one for a new plugin and where to find the existing one for a known plugin.
 **`--emit-tiers <csv>`, new and optional (`055.W3.3`, `AC8`):** the tiers this specific publish
 actually enables — defaults to the manifest's own `tiers` (full vocabulary) when omitted, so every
 pre-`055.W3.3` invocation shape still works unchanged. See `../docs/INVARIANTS.md` for why this flag
@@ -50,6 +54,13 @@ shape in `schema/index-entry.schema.json`):
 ```jsonc
 {
   "plugin_id": "sinkra-os",
+  // REQUIRED as of 055.W3.3 fix-cycle-2 (F9). The plugin's stable IDENTITY, not metadata: mint it
+  // ONCE for a genuinely new plugin (`uuidgen | tr 'A-Z' 'a-z'`) and never change it again — not on
+  // a version bump, not on a rebuild, not on a rename. It is what lets the catalog detect a
+  // plugin_id rename independently of the artifact's bytes (D24(a)). For an EXISTING plugin, copy
+  // the value already recorded in ledger/plugin-ids.json; do NOT mint a new one. publish.mjs
+  // refuses a manifest without it rather than generating one — see ../docs/INVARIANTS.md "check (a)".
+  "lineage_id": "3f2a91c4-0b7e-4d18-9a6f-2c5b8e1d7a40",
   "name": "SINKRA OS",
   "description": "...",
   "version": "1.2.3",
@@ -83,9 +94,15 @@ gate) so publish-time and CI-time checks can never drift apart:
   different digest.
 - `overlay.shadows` reasons must be non-empty (D23) — an empty/missing reason is refused, not
   silently accepted.
-- **Id immutability via digest lineage (`055.W3.3`, check a, D24(a)):** refuses a publish whose
-  artifact bytes were already recorded under a DIFFERENT `plugin_id`. See `../docs/INVARIANTS.md`
-  for the explicitly-named scope of what this does and does not catch.
+- **Id immutability via `lineage_id` (`055.W3.3`, check a, D24(a); reinforced in fix-cycle-2 by the
+  QG's finding F9):** three independent rules — refuses a publish whose `lineage_id` is already
+  registered under a DIFFERENT `plugin_id` (the realistic rename: rename **+ version bump**, caught
+  independently of the bytes), one that declares a DIFFERENT `lineage_id` for a `plugin_id` already
+  on record (no relabelling your own identity), and one whose artifact bytes were already recorded
+  under a different `plugin_id` (the byte-level net kept from the original design). The first rule
+  is the one that made this check an invariant rather than a warning — before it, an author who
+  renamed and bumped the version passed verde. See `../docs/INVARIANTS.md` "check (a)" for the full
+  account, including the residual named rather than hidden.
 - **Burned-name rejection (`055.W3.3`, check b, D24(b)):** refuses a publish under a `plugin_id`
   the ledger has marked `retired` — see `../publisher/retire.mjs` and `../docs/INVARIANTS.md`.
 - **License-in-package-root (`055.W3.3`, check c, D24(c)):** opens the artifact tarball

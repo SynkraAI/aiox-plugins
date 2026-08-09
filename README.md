@@ -46,9 +46,14 @@ empty (VC-5). Wired into `.github/workflows/ci.yml`, runs on every push and PR.
 ## Why the production index is empty
 
 Three invariants have to exist **before** the first real publication, because they are
-irreversible after it (D24): the plugin `id` becomes immutable, a **retired** `plugin_id` is
-**burned forever** (never reused by any publisher, enforced by the persistent ledger — see
-`docs/INVARIANTS.md` "Check (b)"), and a license becomes mandatory at the package root. A fourth, the publish-time half of
+irreversible after it (D24): the plugin `id` becomes immutable (enforced against each entry's
+`lineage_id`, its stable identity across version bumps — see `docs/INVARIANTS.md` "Check (a)"), a
+**retired** `plugin_id` is **burned forever** (never reused by any publisher, enforced by the
+persistent ledger — see `docs/INVARIANTS.md` "Check (b)"), and a license becomes mandatory at the
+package root. The same "before it exists, it costs nothing" logic is why the entry schema went
+`1.0.0` -> `2.0.0` inside this story: adding the required `lineage_id` was free while this index was
+still empty, and would have been a migration of an artifact every offline client pins by digest one
+publication later. A fourth, the publish-time half of
 D21 (`AC8`), was moved into the same story so a typo'd tier fails at publish, not on a paying
 client's machine. The CI that **verifies** all four now exists (`055.W3.3` — see
 `docs/INVARIANTS.md`), but the first real publication is still a deliberate, separate authorization

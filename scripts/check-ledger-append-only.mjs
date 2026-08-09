@@ -7,6 +7,9 @@
 //   - no existing plugin_id key ever disappears
 //   - no existing history[] entry for a plugin_id is ever removed or mutated (old history must
 //     remain an exact, unmodified prefix of new history)
+//   - lineage_id, once set, never changes (fix-cycle-2, F9 — this is the field check (a) uses to
+//     detect a plugin_id rename independently of the artifact's bytes; if it could be rewritten in
+//     the ledger by hand, the rename check would be trivially defeatable one commit at a time)
 //   - first_published_at / retired_at / retired_reason, once set, never change
 //   - status is always exactly "active" or "retired" (fix-cycle-1, F2) and only ever transitions
 //     active -> retired, never retired -> active (a "reborn" burned name is exactly what
@@ -83,6 +86,14 @@ export function checkAppendOnlySequence(versions) {
       if (rec.status !== "active" && rec.status !== "retired") {
         violations.push(`${label}: "${pid}".status is "${rec.status}" — must be exactly "active" or "retired" (closed enum)`);
       }
+      // fix-cycle-2, F9: every record must CARRY a lineage_id, on every version. A record without
+      // one is a plugin whose renames are undetectable — the same defect as never having had the
+      // field, reintroduced by hand-edit.
+      if (!rec.lineage_id) {
+        violations.push(
+          `${label}: "${pid}" has no lineage_id — every ledger record must carry the plugin's stable identity (D24(a), F9); without it a plugin_id rename is undetectable`,
+        );
+      }
     }
 
     if (prev) {
@@ -93,6 +104,14 @@ export function checkAppendOnlySequence(versions) {
         if (!nextRec) {
           violations.push(`${label}: plugin_id "${pid}" was REMOVED from the ledger — append-only violated`);
           continue;
+        }
+        // fix-cycle-2, F9: lineage_id is immutable once set. Rewriting it in the ledger would free
+        // the old lineage for reuse under a new plugin_id — check (a)'s rename detection defeated
+        // one commit at a time, which is precisely the class of quiet edit this script exists for.
+        if (prevRec.lineage_id && prevRec.lineage_id !== nextRec.lineage_id) {
+          violations.push(
+            `${label}: "${pid}".lineage_id changed (${prevRec.lineage_id} -> ${nextRec.lineage_id}) — a plugin's stable identity is set once and never rewritten (D24(a), F9)`,
+          );
         }
         if (prevRec.first_published_at !== nextRec.first_published_at) {
           violations.push(

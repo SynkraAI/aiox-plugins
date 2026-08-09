@@ -3,9 +3,14 @@ name: ci
 # Base CI for the catalog repo (story 055.W3.1) + D24's full invariant suite (story 055.W3.3):
 # - D20(1) blocking secret scanning + D20(4) capability analysis: still story 055.W4.1 / 055.W4.2,
 #   not built here.
-# - D24's three no-going-back invariants (immutable id via digest lineage, burned-name ledger,
+# - D24's three no-going-back invariants (immutable id via lineage_id, burned-name ledger,
 #   license-in-package-root) + the publish-time half of D21 (tier vocabulary from the plugin's own
 #   manifest) — ADDED this story. See docs/INVARIANTS.md for the full design reasoning.
+# - fix-cycle-2 (QG finding F9): check (a) was reinforced with lineage_id, a stable per-plugin
+#   identity that survives a version bump — digest lineage alone let the realistic rename (rename +
+#   version bump) pass verde. Nothing new is wired into this workflow by that change: the existing
+#   steps below already cover it, because the new rules live inside the same shared modules the
+#   unit tests, validate-index, ledger-append-only and ledger-consistency steps already exercise.
 # What this workflow checks: the automated unit test suite (test/*.test.mjs, node:test — includes
 # every negative fixture proving each of the 4 checks actually rejects the case it's meant to
 # reject, AC5), the index files are structurally valid against the documented schema, the ledger's

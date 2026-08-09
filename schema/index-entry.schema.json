@@ -1,12 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/SynkraAI/aiox-plugins/blob/main/schema/index-entry.schema.json",
-  "title": "AIOX Plugin Catalog — Index Entry (v1.0.0)",
-  "description": "One entry of the AIOX plugin catalog index (ADR-COCKPIT-ENTERPRISE-PREMIUM-PACK D22). Story 055.W3.1.",
+  "title": "AIOX Plugin Catalog — Index Entry (v2.0.0)",
+  "description": "One entry of the AIOX plugin catalog index (ADR-COCKPIT-ENTERPRISE-PREMIUM-PACK D22). Story 055.W3.1; v2.0.0 adds the REQUIRED lineage_id (story 055.W3.3 fix-cycle-2, F9) — a breaking change to the entry shape, made while the production index was still empty and therefore at zero migration cost.",
   "type": "object",
   "required": [
     "schema_version",
     "plugin_id",
+    "lineage_id",
     "version",
     "tiers",
     "digest",
@@ -19,13 +20,18 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1.0.0",
-      "description": "Version of THIS schema, not of the plugin. Bump when the entry shape changes."
+      "const": "2.0.0",
+      "description": "Version of THIS schema, not of the plugin. Bump when the entry shape changes. 1.0.0 -> 2.0.0: lineage_id became required (055.W3.3 fix-cycle-2, F9)."
     },
     "plugin_id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
-      "description": "Root of the <plugin-id>/<skill> namespace (D23). IMMUTABLE after the first publication (D24(a)) — never reused once a name is retired (D24(b))."
+      "description": "Root of the <plugin-id>/<skill> namespace (D23). IMMUTABLE after the first publication (D24(a)) — never reused once a name is retired (D24(b)). Immutability is enforced against lineage_id, not against this field alone: comparing a plugin_id to itself proves nothing."
+    },
+    "lineage_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "IDENTITY, NOT METADATA (D24(a), 055.W3.3 fix-cycle-2 / F9). The plugin's stable identity: minted ONCE, as an opaque lowercase UUID, when the plugin is first published, and carried unchanged through every version bump, rebuild, display-name change and re-publish for the rest of that plugin's life. It is what makes a plugin_id rename detectable INDEPENDENTLY of the artifact's bytes — digest lineage alone only caught a same-bytes republish and let the realistic rename (rename + version bump) through. The UUID format is load-bearing, not cosmetic: an opaque value gives an author no reason to 'update' it while renaming, which a human-meaningful one would invite. Never regenerate it for an existing plugin; changing it is refused at publish time (lib/entry-schema.mjs::checkIdImmutabilityAgainstLedger), in CI against the ledger (scripts/check-ledger-consistency.mjs), across the ledger's whole git history (scripts/check-ledger-append-only.mjs) and within a single index file (scripts/validate-index.mjs)."
     },
     "name": {
       "type": "string",

@@ -16,6 +16,6 @@ const productionIndexPath = join(here, "..", "index", "index.json");
 
 test("index/index.json (production) has zero entries — VC-5, story 055.W3.1", () => {
   const data = JSON.parse(readFileSync(productionIndexPath, "utf8"));
-  assert.equal(data.schema_version, "1.0.0");
+  assert.equal(data.schema_version, "2.0.0"); // fix-cycle-2 (F9) — lineage_id made this a breaking bump
   assert.deepEqual(data.entries, [], "the production catalog must stay empty until 055.W3.3's D24 invariant CI exists — see README.md 'Why the production index is empty'");
 });

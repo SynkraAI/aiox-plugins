@@ -1,20 +1,24 @@
-# Index entry schema (v1.0.0)
+# Index entry schema (v2.0.0)
 
 Canonical, machine-checked definition: `schema/index-entry.schema.json`. This file is the human
 explanation; the JSON Schema is the source of truth.
 
-The entry SHAPE below is unchanged by story `055.W3.3` — no new field was added. What changed is
-what gets VERIFIED before an entry with this shape is allowed to land: see `INVARIANTS.md` for the
-four no-going-back invariants (D24 a/b/c + D21's publish-time tier check) now enforced in CI, and
-why each one is designed the way it is (in particular, why `tiers` and `license.spdx_or_path` needed
-no new field to become non-tautologically checkable).
+Story `055.W3.3` first landed with the entry SHAPE unchanged — only what gets VERIFIED changed: see
+`INVARIANTS.md` for the four no-going-back invariants (D24 a/b/c + D21's publish-time tier check)
+now enforced in CI. Its fix-cycle-2 then added **exactly one** new field, `lineage_id`, because the
+QG's finding **F9** proved check (a) could not enforce D24(a) without one: comparing digests only
+catches a same-bytes republish, never the realistic rename (rename + version bump). That is a
+breaking change to the entry shape, hence `schema_version` `1.0.0` -> `2.0.0`. It was made while
+the production index was still empty, which is the only moment it costs nothing —
+`INVARIANTS.md` "check (a)" carries the full reasoning.
 
 ## Field-by-field
 
 | Field | Required | Notes |
 |---|---|---|
-| `schema_version` | yes | Version of the entry SHAPE, not of the plugin. `"1.0.0"` today. |
-| `plugin_id` | yes | Kebab-case. Root of the `<plugin-id>/<skill>` namespace (D23). **Immutable after first publication** (D24(a)) and, once retired, the name is **never reused** (D24(b)) — these are the two irreversible choices this schema exists to protect. |
+| `schema_version` | yes | Version of the entry SHAPE, not of the plugin. `"2.0.0"` today (`1.0.0` predates `lineage_id`). |
+| `plugin_id` | yes | Kebab-case. Root of the `<plugin-id>/<skill>` namespace (D23). **Immutable after first publication** (D24(a)) and, once retired, the name is **never reused** (D24(b)) — these are the two irreversible choices this schema exists to protect. Immutability is enforced against `lineage_id`, never against this field alone: comparing a `plugin_id` to itself proves nothing. |
+| `lineage_id` | **yes** (new in v2.0.0) | **IDENTITY, not metadata.** An opaque canonical lowercase UUID, minted **once** for a genuinely new plugin (`uuidgen \| tr 'A-Z' 'a-z'`) and never changed again — not on a version bump, not on a rebuild, not on a rename. It is what makes a `plugin_id` rename detectable *independently of the artifact's bytes*, which is the property D24(a) needs and digest lineage could not provide (finding **F9**). The opaque format is load-bearing: a human-meaningful value would invite an author to "update" it while renaming, reopening the hole. There is deliberately no auto-mint fallback — `publish.mjs` refuses a manifest without one rather than inventing a fresh identity that would silently disable the rename check forever after. Enforced at publish time, in CI against the ledger, across the ledger's whole git history, and within a single index file. |
 | `name` | no | Display name. Free to change across versions. |
 | `description` | no | Free text. |
 | `version` | yes | Semver of the plugin package (not of the schema). |
@@ -37,7 +41,13 @@ no new field to become non-tautologically checkable).
 
 ## Versioning this schema
 
-`schema_version` is a closed value per release of the schema (currently only `"1.0.0"` validates).
-A breaking change to the entry shape bumps this constant and is expected to ship alongside a CI
-check that can read both the old and the new shape during the transition — not designed here, since
-no second version exists yet.
+`schema_version` is a closed value per release of the schema (currently only `"2.0.0"` validates —
+`lib/entry-schema.mjs::ENTRY_SCHEMA_VERSION` is the single constant every check reads, so the
+publisher and CI can never disagree about which version is current).
+
+The `1.0.0` -> `2.0.0` bump (fix-cycle-2, F9) shipped **without** a dual-shape transition period,
+and that was a deliberate, one-time affordance rather than a precedent: both `index/index.json` and
+`ledger/plugin-ids.json` were still empty, so there was no old-shape data anywhere to read. A future
+breaking change will not have that luxury — once real entries exist, each is pinned by digest by
+offline clients, and the bump will have to ship alongside a CI check that can read both shapes
+during the transition.

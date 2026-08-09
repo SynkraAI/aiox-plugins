@@ -14,16 +14,20 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense } from "./helpers/tarball.mjs";
+import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense } from "./helpers/tarball.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
 const retireScript = join(here, "..", "publisher", "retire.mjs");
 
 const GOOD_HOST = "pub-42179e62dc3040138151ec33229dd073.r2.dev";
+
+// fix-cycle-2 (F9): manifest.lineage_id is REQUIRED — the plugin's stable identity.
+const LIN_ENTERPRISE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "aiox-plugins-publish-cli-test-"));
@@ -36,22 +40,31 @@ function withTempDir(fn) {
 
 function writeEmptyIndex(dir) {
   const target = join(dir, "index.json");
-  writeFileSync(target, JSON.stringify({ schema_version: "1.0.0", generated_at: null, entries: [] }, null, 2));
+  writeFileSync(target, JSON.stringify({ schema_version: "2.0.0", generated_at: null, entries: [] }, null, 2));
   return target;
 }
 
 function writeEmptyLedger(dir) {
   const ledger = join(dir, "ledger.json");
-  writeFileSync(ledger, JSON.stringify({ schema_version: "1.0.0", plugins: {} }, null, 2));
+  writeFileSync(ledger, JSON.stringify({ schema_version: "2.0.0", plugins: {} }, null, 2));
   return ledger;
 }
 
-function writeManifest(dir, overrides = {}) {
-  const manifest = join(dir, "manifest.json");
+function writeManifest(dir, overrides = {}, filename = "manifest.json") {
+  const manifest = join(dir, filename);
   writeFileSync(
     manifest,
     JSON.stringify(
-      { plugin_id: "aiox-enterprise", name: "test", description: "test", version: "0.0.0-fixture", tiers: ["enterprise"], license: "MIT", ...overrides },
+      {
+        plugin_id: "aiox-enterprise",
+        lineage_id: LIN_ENTERPRISE,
+        name: "test",
+        description: "test",
+        version: "0.0.0-fixture",
+        tiers: ["enterprise"],
+        license: "MIT",
+        ...overrides,
+      },
       null,
       2,
     ),
@@ -283,39 +296,170 @@ describe("check (d) / AC8 — tier vocabulary from the plugin's OWN manifest, ne
   });
 });
 
-describe("check (a) — id immutability via digest lineage (D24(a), AC1, AC5 negative fixture)", () => {
-  test("the SAME artifact bytes, already published under plugin_id X, are REFUSED under a DIFFERENT plugin_id Y", () => {
+describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", () => {
+  // Publishes plugin_id/lineage/version with the given artifact bytes; returns the CLI's stderr on
+  // refusal, or null when the publish was accepted. Every negative fixture below goes through the
+  // REAL CLI as a subprocess, never through the library functions directly.
+  function tryPublish({ dir, target, ledger, plugin_id, lineage_id, version, artifact }) {
+    const manifest = writeManifest(dir, { plugin_id, lineage_id, version }, `manifest-${plugin_id}-${version}.json`);
+    try {
+      execFileSync("node", [
+        publishScript,
+        "--manifest", manifest, "--target", target, "--ledger", ledger,
+        "--subject", "acct_test", "--artifact", artifact,
+        "--mirror-url", `https://${GOOD_HOST}/plugins/${plugin_id}/${version}/x.tar.gz`,
+        "--r2-key", `plugins/${plugin_id}/${version}/x.tar.gz`,
+        "--no-push",
+      ], { stdio: "pipe" });
+      return null;
+    } catch (e) {
+      return e.stderr.toString();
+    }
+  }
+
+  // ── THE F9 FIXTURE (fix-cycle-2, founder decision 2026-08-09) ─────────────────────────────────
+  // This is the case D24(a) exists to prevent and the one an author actually performs: rename the
+  // plugin AND bump the version, so the two identities share no bytes whatsoever. Against the
+  // pre-F9 code this ran to completion with exit 0 and TWO entries in the index — reproduced
+  // literally before the fix, see the story's handoff for the captured command + output. Without
+  // this fixture the correction would be asserted, not proven.
+  test("F9 — a rename WITH a version bump (different bytes) is REFUSED, on lineage rather than on digest", () => {
     withTempDir((dir) => {
       const target = writeEmptyIndex(dir);
       const ledger = writeEmptyLedger(dir);
-      const artifact = buildValidArtifact(); // same bytes reused for both publishes below
 
-      // first publish, under plugin_id "aiox-enterprise" — succeeds, records the digest in the ledger
-      const manifestX = writeManifest(dir, { plugin_id: "aiox-enterprise" });
-      publish({
-        manifest: manifestX, target, ledger, subject: "acct_test", artifact,
-        "mirror-url": `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
-        "r2-key": `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
-        "no-push": true,
+      // v1 under the original name — legitimate, lands
+      const artifactV1 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1.0.0\n" });
+      assert.equal(
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: artifactV1 }),
+        null,
+        "the first, legitimate publish must succeed",
+      );
+
+      // v1.1.0 under a NEW name, REBUILT — different bytes, so digest lineage is blind to it
+      const artifactV2 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1.1.0 — rebuilt, different content\n" });
+      const digestV1 = createHash("sha256").update(readFileSync(artifactV1)).digest("hex");
+      const digestV2 = createHash("sha256").update(readFileSync(artifactV2)).digest("hex");
+      assert.notEqual(digestV1, digestV2, "the fixture is only meaningful if the bytes genuinely differ");
+
+      const stderr = tryPublish({
+        dir, target, ledger,
+        plugin_id: "aiox-enterprise-renamed",
+        lineage_id: LIN_ENTERPRISE, // the SAME plugin — its identity does not change when it is renamed
+        version: "1.1.0",
+        artifact: artifactV2,
       });
+      assert.ok(stderr !== null, "expected the renamed publish to be REFUSED (pre-F9 this exited 0)");
+      assert.match(stderr, /lineage_id .* is already registered under a DIFFERENT plugin_id \("aiox-enterprise"\)/);
+      assert.match(stderr, /A version bump does NOT make this a different plugin/);
+      assert.doesNotMatch(stderr, /these exact artifact bytes/, "the digest rule cannot see this case — lineage is what caught it");
 
-      // second publish attempt, SAME bytes, under a DIFFERENT plugin_id "aiox-enterprise-renamed"
-      const manifestY = join(dir, "manifest-y.json");
-      writeFileSync(manifestY, JSON.stringify({ plugin_id: "aiox-enterprise-renamed", name: "renamed", description: "x", version: "0.0.0-fixture", tiers: ["enterprise"], license: "MIT" }));
+      const index = JSON.parse(readFileSync(target, "utf8"));
+      assert.equal(index.entries.length, 1, "only the first (legitimate) publish must have landed");
+      assert.equal(index.entries[0].plugin_id, "aiox-enterprise");
+      const ledgerData = JSON.parse(readFileSync(ledger, "utf8"));
+      assert.deepEqual(Object.keys(ledgerData.plugins), ["aiox-enterprise"], "the refused rename must not have been recorded");
+    });
+  });
+
+  test("F9 — a genuinely NEW plugin (its own lineage, its own bytes) still publishes: the check is not a blanket refusal", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      assert.equal(
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# a\n" }) }),
+        null,
+      );
+      assert.equal(
+        tryPublish({ dir, target, ledger, plugin_id: "sinkra-os", lineage_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# b\n" }) }),
+        null,
+        "a distinct plugin with a distinct lineage must not be caught by the rename check",
+      );
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 2);
+    });
+  });
+
+  test("F9 — a legitimate version bump of the SAME plugin (same id, same lineage, new bytes) still publishes", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const args = { dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE };
+      assert.equal(tryPublish({ ...args, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1\n" }) }), null);
+      assert.equal(tryPublish({ ...args, version: "1.1.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v2\n" }) }), null);
+      const ledgerData = JSON.parse(readFileSync(ledger, "utf8"));
+      assert.equal(ledgerData.plugins["aiox-enterprise"].history.length, 2);
+      assert.equal(ledgerData.plugins["aiox-enterprise"].lineage_id, LIN_ENTERPRISE, "the identity is carried, not rewritten");
+    });
+  });
+
+  test("F9 — relabelling an existing plugin_id's OWN lineage is REFUSED (closes the two-step evasion)", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      assert.equal(
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1\n" }) }),
+        null,
+      );
+      const stderr = tryPublish({
+        dir, target, ledger,
+        plugin_id: "aiox-enterprise",
+        lineage_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", // step 1 of the evasion: free up the old lineage
+        version: "1.1.0",
+        artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v2\n" }),
+      });
+      assert.ok(stderr !== null, "expected the relabelling to be REFUSED");
+      assert.match(stderr, /is on record with lineage_id/);
+      assert.match(stderr, /set once at its first publish and never changes/);
+    });
+  });
+
+  test("F9 — a manifest with NO lineage_id is refused at the CLI usage level, and the error says how to mint one", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = join(dir, "manifest-no-lineage.json");
+      writeFileSync(manifest, JSON.stringify({ plugin_id: "aiox-enterprise", name: "x", description: "x", version: "1.0.0", tiers: ["enterprise"], license: "MIT" }));
       let stderr = "";
       try {
         execFileSync("node", [
           publishScript,
-          "--manifest", manifestY, "--target", target, "--ledger", ledger,
-          "--subject", "acct_test", "--artifact", artifact,
-          "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise-renamed/0.0.0-fixture/x.tar.gz`,
-          "--r2-key", `plugins-fixtures/aiox-enterprise-renamed/0.0.0-fixture/x.tar.gz`,
+          "--manifest", manifest, "--target", target, "--ledger", ledger,
+          "--subject", "acct_test", "--artifact", buildValidArtifact(),
+          "--mirror-url", `https://${GOOD_HOST}/plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+          "--r2-key", `plugins/aiox-enterprise/1.0.0/x.tar.gz`,
           "--no-push",
         ], { stdio: "pipe" });
         assert.fail("expected publish to be REFUSED");
       } catch (e) {
         stderr = e.stderr.toString();
       }
+      assert.match(stderr, /manifest\.lineage_id is required/);
+      assert.match(stderr, /uuidgen/, "the error must tell a real publisher what to DO, not only what is missing");
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  // ── (a3), retained from the pre-F9 design as the byte-level net ───────────────────────────────
+  test("the SAME artifact bytes, already published under plugin_id X, are REFUSED under a DIFFERENT plugin_id Y even with a forged fresh lineage", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const artifact = buildValidArtifact(); // same bytes reused for both publishes below
+
+      assert.equal(
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "0.0.0-fixture", artifact }),
+        null,
+      );
+
+      // a fresh lineage_id dodges (a1) — (a3) must still catch it on the bytes alone
+      const stderr = tryPublish({
+        dir, target, ledger,
+        plugin_id: "aiox-enterprise-renamed",
+        lineage_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        version: "0.0.0-fixture",
+        artifact,
+      });
+      assert.ok(stderr !== null, "expected publish to be REFUSED");
       assert.match(stderr, /already published under a DIFFERENT plugin_id \("aiox-enterprise"\)/);
       assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 1, "only the first (legitimate) publish must have landed");
     });

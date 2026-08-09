@@ -9,34 +9,86 @@ branch that disables any of them — verified by an active grep sweep of `publis
 `.github/workflows/ci.yml` on every close of this story (see the story's handoff for the literal
 command + output).
 
-## Check (a) — `id` immutability, via digest lineage (not a fabricated field)
+## Check (a) — `id` immutability, via `lineage_id`
 
 **The trap this story names explicitly:** a check that only compares an entry's `plugin_id` to
 itself passes verde always and proves nothing. "Already registered for that plugin" presupposes an
-identity for "that plugin" that survives a `plugin_id` change — and nothing in the manifest or the
-index-entry schema carries such an identity today (no `origin_id`, no UUID, nothing). Inventing one
-now, before any real caller has ever needed it, would be exactly the kind of speculative field
-No-Invention exists to block.
+identity for "that plugin" that survives a `plugin_id` change.
 
-**What this repo actually checks instead:** the one non-fabricated signal that *does* survive a
-`plugin_id` change is the artifact's own digest. `checkIdImmutabilityAgainstLedger`
-(`lib/entry-schema.mjs`) refuses a publish when the exact same artifact bytes were already recorded
-in the ledger under a **different** `plugin_id`. That is direct, mechanical evidence that "this is
-the same package trying to change its immutable namespace root" — not an assertion, not a
-convention, a byte-for-byte fact the ledger already has on record.
+### The first attempt, and why it was not enough (F9)
 
-**The scope of this, named explicitly, not hidden:** this catches a same-bytes republish under a new
-id. It does **not** catch a rename where the author *also* changes the artifact's content (a
-version bump, a rebuild) — that is indistinguishable from a brand-new plugin at the data level
-without a lineage field that does not exist. Closing that wider gap is future work if a real caller
-ever needs it; today it would be speculative. The negative fixture proving the narrower, real check
-lives in `test/publish-cli.test.mjs` ("check (a) — id immutability via digest lineage") and
-`test/entry-schema.test.mjs`.
+The original design of this check used the one signal already present in the data: the artifact's
+**digest**. Refuse a publish when the exact same bytes were already recorded under a different
+`plugin_id`. The reasoning was No-Invention — nothing in the manifest carried a lineage, so rather
+than fabricate a field, use a byte-for-byte fact the ledger already had.
+
+The QG (rounds 1 and 2, finding **F9**) named the hole, and the founder ruled on it on 2026-08-09:
+**digest lineage only catches the lazy case.** An author who renames a plugin, in practice, also
+bumps its version — so the two identities share no bytes at all, and nothing digest-based can
+connect them. The check passed verde on the case it exists to prevent, and fired only on an
+exact-byte republish nobody realistically performs. Reproduced literally before the fix: two
+publishes, `aiox-enterprise@1.0.0` then `aiox-enterprise-renamed@1.1.0` with rebuilt bytes, both
+accepted, exit `0`, two entries in the index.
+
+That failed this story's own bar twice over: `AC4` ("an invariant that only warns is not an
+invariant") and `AC5` ("a check that passes verde against a valid input proves nothing").
+
+### What the check is now
+
+`lineage_id` — an opaque, canonical lowercase UUID, declared in the plugin's manifest, **minted once
+for a genuinely new plugin and never changed again**: not on a version bump, not on a rebuild, not
+on a display-name change, and above all not on a rename. It is IDENTITY, not metadata. It is
+`REQUIRED` on every entry (`schema/index-entry.schema.json`, `lib/entry-schema.mjs::validateEntry-
+Shape`) and stamped into the ledger record at first publish (`lib/ledger.mjs::recordPublish`).
+
+`checkIdImmutabilityAgainstLedger` (`lib/entry-schema.mjs`) now enforces three independent rules:
+
+| Rule | What it refuses | What it catches that the others don't |
+|---|---|---|
+| **(a1) lineage collision** | This `lineage_id` is already registered under a **different** `plugin_id` | The realistic rename: rename + version bump, **byte-independent** — this is the F9 fix |
+| **(a2) lineage instability** | This `plugin_id` is on record with a **different** `lineage_id` | The two-step evasion: relabel your own identity first, then rename under the freed-up lineage |
+| **(a3) digest lineage** | These exact bytes are already recorded under a different `plugin_id` | A forged fresh `lineage_id` shipped with the **identical** artifact — the pre-F9 rule, kept as a second net |
+
+**Two design choices that are load-bearing, not cosmetic:**
+
+1. **The UUID format.** A human-meaningful lineage value (a slug, a name, the old `plugin_id`) would
+   invite an author to "update" it in the very same edit that renames the plugin — silently
+   reopening the hole. An opaque UUID gives them no reason to touch it.
+2. **No auto-mint fallback.** `publish.mjs` refuses a manifest with no `lineage_id` instead of
+   generating one. If it minted a value whenever one was absent, an author who simply forgot to
+   carry theirs forward would receive a fresh identity and every later rename would pass verde —
+   the exact defect the field exists to close, reintroduced as a convenience. Fail-closed is the
+   only shape of this that is an invariant rather than a warning.
+
+**The residual, named not hidden:** an author who changes **both** the artifact's bytes **and**
+forges a new `lineage_id` is, at the data level, declaring a brand-new plugin, and nothing on this
+side of the wire can distinguish that from an actually-new plugin. What F9 changed is which case is
+the *default*: before, the honest, ordinary rename passed verde; now evading the invariant requires
+deliberately forging an identity token, which is an act, not an oversight.
+
+**Why the field could be added at all:** the production `index/index.json` was still `{"entries":
+[]}` and the ledger still `{"plugins": {}}` when this landed. A required new field costs **zero**
+now and becomes a migration of an artifact every client pins by digest the moment the first real
+entry ships. That is the same reasoning that made D24 worth ratifying before a catalog existed:
+these things only cost nothing before they exist.
+
+**Negative fixtures (`AC5`), all through the real CLI as a subprocess:**
+`test/publish-cli.test.mjs`, describe "check (a)" — the rename-with-version-bump refusal (the F9
+fixture), the relabelling refusal, the missing-`lineage_id` refusal, the same-bytes-forged-lineage
+refusal, plus three positive controls (a genuinely new plugin, a legitimate version bump, and a
+distinct plugin with its own lineage) so the check is provably not a blanket refusal.
+`test/entry-schema.test.mjs` covers the same rules at the function level.
 
 **CI-side re-proof, independent of publish-time:** `scripts/check-ledger-consistency.mjs` re-derives
-this same check purely from the committed index + ledger, so a hand-edited `index/index.json` that
+all three rules purely from the committed index + ledger, so a hand-edited `index/index.json` that
 skipped `publisher/publish.mjs` entirely is still caught (see "Why `fixtures/index.json` is out of
-this check's scope" below for exactly what it does and does not cover).
+this check's scope" below for exactly what it does and does not cover). `scripts/validate-index.mjs`
+additionally checks lineage consistency **within a single index file** — one `lineage_id` under two
+`plugin_id`s, or one `plugin_id` under two `lineage_id`s — which catches a rename added as both
+entries in one hand-edit that never touched the ledger at all. And
+`scripts/check-ledger-append-only.mjs` proves no `lineage_id` was ever rewritten or dropped across
+the ledger's entire git history, since a rewritable identity would be trivially defeatable one
+commit at a time.
 
 ## Check (b) — burned name survives despublish
 
@@ -104,9 +156,9 @@ vocabulary — the literal requirement of `AC8`.
 `scripts/check-ledger-append-only.mjs` walks **every commit** that ever touched
 `ledger/plugin-ids.json` (oldest to newest) and proves each version is a pure addition over the
 previous one: no existing `plugin_id` key disappears, no existing `history[]` entry is removed or
-edited (old history must remain an exact, unmodified prefix), `first_published_at`/`retired_at`/
-`retired_reason` never change once set, and `status` only ever transitions `active -> retired`,
-never back. This requires the CI checkout to fetch full history (`actions/checkout@v4` with
+edited (old history must remain an exact, unmodified prefix), every record carries a `lineage_id`
+and never has it rewritten (F9 — see check (a)), `first_published_at`/`retired_at`/`retired_reason`
+never change once set, and `status` only ever transitions `active -> retired`, never back. This requires the CI checkout to fetch full history (`actions/checkout@v4` with
 `fetch-depth: 0`, wired in `.github/workflows/ci.yml`) — a shallow clone would silently see one
 commit and report a false `OK`, which is exactly the "gate that passes verde without pegging what it
 should" trap this story exists to avoid, so the requirement is called out explicitly rather than left

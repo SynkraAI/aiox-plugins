@@ -66,3 +66,16 @@ one ever be authorized) would not be refused by check (a) or (b) because of anyt
 directory. This was already true by construction before `055.W3.3` (no ledger existed for these
 fixtures to touch); it is stated explicitly here because the `055.W3.1` handoff routed this doc pass
 to `055.W3.3` rather than leaving it undocumented.
+
+## `lineage_id` on these fixtures (`055.W3.3` fix-cycle-2, F9) — hand-assigned, never ledger-recorded
+
+The F9 fix made `lineage_id` a REQUIRED entry field and bumped the entry schema to `2.0.0` (see
+`../docs/SCHEMA.md` and `../docs/INVARIANTS.md` "check (a)"). The four entries in
+`fixtures/index.json` predate that field entirely, so each was given a freshly-minted UUID **by
+hand**, in this file only, purely so the fixture data conforms to the schema CI now validates
+against. That is a data migration of disposable test data, not a publish: none of these UUIDs went
+through `publisher/publish.mjs`, none of them is recorded in `ledger/plugin-ids.json` (which remains
+`{"plugins": {}}`), and consequently none of them reserves a lineage against anything. The `VC-7`
+statement above is unchanged by F9 — a future authorized publish under any of these `plugin_id`s
+would mint its own lineage and be refused by neither check (a) nor check (b) because of anything in
+this directory.

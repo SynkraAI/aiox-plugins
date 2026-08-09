@@ -24,11 +24,12 @@
 // can exercise it directly without touching disk. `validateFile` (below) is the thin CLI wrapper.
 
 import { readFileSync } from "node:fs";
-import { validateEntryShape, checkArtifactBinding, checkArtifactHost } from "../lib/entry-schema.mjs";
+import { ENTRY_SCHEMA_VERSION, validateEntryShape, checkArtifactBinding, checkArtifactHost } from "../lib/entry-schema.mjs";
 
 export function validateIndexData(data, label) {
   const errors = [];
-  if (data.schema_version !== "1.0.0") errors.push(`${label}: top-level schema_version must be '1.0.0'`);
+  if (data.schema_version !== ENTRY_SCHEMA_VERSION)
+    errors.push(`${label}: top-level schema_version must be '${ENTRY_SCHEMA_VERSION}'`);
   if (!Array.isArray(data.entries)) {
     errors.push(`${label}: entries must be an array`);
     return errors;
@@ -50,6 +51,37 @@ export function validateIndexData(data, label) {
       errors.push(`${label}: duplicate ${key} with conflicting digest — D24 immutability violated`);
     }
     seen.set(key, e.digest?.value);
+  }
+
+  // fix-cycle-2 (F9): the same guard for lineage, INSIDE a single index file. checkIdImmutability-
+  // AgainstLedger catches a lineage collision against the LEDGER; this catches one that is visible
+  // in the index alone — two entries sharing a lineage_id under different plugin_ids, i.e. a rename
+  // sitting in plain sight. Both halves matter: a hand-edit could add both entries at once without
+  // ever touching the ledger, and then the ledger-side check would have nothing to compare against.
+  // Conversely, a lineage_id must stay pinned to ONE plugin_id, so the reverse mapping is checked
+  // too rather than assumed.
+  const lineageOwner = new Map();
+  for (const e of data.entries) {
+    if (!e.lineage_id) continue; // absence is already a shape error, reported above
+    const owner = lineageOwner.get(e.lineage_id);
+    if (owner && owner !== e.plugin_id) {
+      errors.push(
+        `${label}: lineage_id ${e.lineage_id} appears under two different plugin_ids ("${owner}" and "${e.plugin_id}") — the same plugin cannot change its immutable namespace root (D24(a), F9)`,
+      );
+    }
+    lineageOwner.set(e.lineage_id, e.plugin_id);
+  }
+
+  const pluginLineage = new Map();
+  for (const e of data.entries) {
+    if (!e.lineage_id) continue;
+    const known = pluginLineage.get(e.plugin_id);
+    if (known && known !== e.lineage_id) {
+      errors.push(
+        `${label}: plugin_id "${e.plugin_id}" appears with two different lineage_ids (${known} and ${e.lineage_id}) — a plugin's lineage is set once and never rewritten (D24(a), F9)`,
+      );
+    }
+    pluginLineage.set(e.plugin_id, e.lineage_id);
   }
   return errors;
 }
