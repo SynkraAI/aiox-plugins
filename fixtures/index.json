@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-09T15:56:02.637Z",
+  "generated_at": "2026-08-09T15:56:04.279Z",
   "entries": [
     {
       "schema_version": "1.0.0",
@@ -55,6 +55,36 @@
       "overlay": {
         "shadows": {
           "review": "the Enterprise pack's own /review — declared, not accidental (D23 test case)"
+        }
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "plugin_id": "acme-hostile-fixture",
+      "name": "Acme *Hostile* <b>Fixture</b>\n# FAKE HEADING",
+      "description": "Proves render-catalog.mjs sanitizes manifest-controlled text (fix-cycle-1, F-CR-PLUGINS-5). Contains: <script>alert(1)</script>, a fake heading attempt, and a table-breaking pipe: | x | y |",
+      "version": "0.0.0-fixture",
+      "tiers": [
+        "base`; DROP"
+      ],
+      "digest": {
+        "algorithm": "sha256",
+        "value": "9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a"
+      },
+      "artifact": {
+        "mirror_url": "https://pub-42179e62dc3040138151ec33229dd073.r2.dev/plugins-fixtures/acme-hostile-fixture/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz",
+        "r2_key": "plugins-fixtures/acme-hostile-fixture/0.0.0-fixture/9ec01ff45d2966fde7de79e46b31fa97a9485f28e2b625fdfe0af0aaa433561a.tar.gz"
+      },
+      "publisher": {
+        "subject": "acct_<script>alert(1)</script>_hostile"
+      },
+      "published_at": "2026-08-09T15:56:04.278Z",
+      "license": {
+        "spdx_or_path": "MIT` `injected <img src=x onerror=alert(1)>"
+      },
+      "overlay": {
+        "shadows": {
+          "review": "Hostile reason: `code`, <img src=x onerror=alert(1)>, a ] ( markdown-link-break ) attempt, and a\nnewline that tries to start a new blockquote line"
         }
       }
     }
