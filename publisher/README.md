@@ -110,9 +110,29 @@ gate) so publish-time and CI-time checks can never drift apart:
 - **Tier vocabulary from the manifest (`055.W3.3`, check d, `AC8`, D21 publish-time half):** refuses
   a publish whose `--emit-tiers` includes a tier the manifest itself doesn't declare, naming both the
   invalid tier and the valid vocabulary.
+- **Mandatory `allowed-tools` (`055.W4.2`, D17/AC1):** every publishable skill must declare
+  `allowed-tools`; a skill with none — or with an empty value, a wildcard, or the silently-ignored
+  `allowed_tools`/`allowedTools` spelling — is refused. A manifest that tries to **self-declare**
+  `capabilities`/`permissions`/`grants`/`sandbox`/`trust_level` is likewise refused rather than
+  ignored (capabilities are DERIVED on the AIOX side — `../lib/capability-analyzer.mjs`,
+  `../docs/CAPABILITIES.md`).
+- **Secret scanning (`055.W4.1`, D20(1)):** refuses a publish when a recognisable credential is found
+  in the **manifest** (which becomes a public catalog entry) or in the **artifact's real bytes**,
+  using a vendored subset of gitleaks' rule corpus (`../lib/secret-rules.mjs` — 14 rules / 14 classes,
+  each with a negative fixture through this very CLI). **Also refuses when a member could not be
+  scanned at all** — binary or over the size cap — because unscannable is treated as not publishable
+  (fail-closed; see `../docs/SECRET-SCANNING.md` §5.1 for the decision, its named cost, and why there
+  is deliberately no override flag). What the scan can and cannot see is printed on **every** run,
+  including a successful one.
 
 All of the above are BLOCKING, unconditionally — no flag/env var/branch disables any of them
 (AC4/AC6; see the story's handoff for the literal bypass-grep command + output).
+
+> **Keeping this list true is part of the job.** This enumeration reads as complete, so a gate that
+> ships without a line here is a gate readers will not know exists — the `055.W4.1` QG caught exactly
+> that (finding `F3`: two shipped blocking gates missing from this list, while the paragraph below
+> still announced one of them as unbuilt). If you add a blocking check to `publish.mjs`, add it here
+> in the same commit.
 
 All checks are covered by automated tests (`../test/`, `node --test test/*.test.mjs`, Node's
 built-in `node:test` — zero new dependency), wired into `.github/workflows/ci.yml` so they run on
@@ -125,5 +145,14 @@ fixed): `plugin_id` need only appear *somewhere* in the path, not at the canonic
 (`F-BINDING-POSITION-AGNOSTIC`); and the freely-typed `name` field can carry Unicode look-alike
 characters (`F-HOMOGLYPH-NAME`, belongs to the still-open `O4` curation question). Both are pinned as
 explicit regression tests in `../test/entry-schema.test.mjs` so the current, accepted behavior is a
-deliberate choice, not silent drift. D20(1)/(2)/(4) — blocking secret scanning, capability analysis,
-version pinning — remain `055.W4.1`/`055.W4.2`, not built here.
+deliberate choice, not silent drift.
+
+D20(1) (blocking secret scanning) and D20(4) (capability analysis) **are now built** and gate this
+very script — see the two entries added to the blocking list above (`055.W4.1` and `055.W4.2`
+respectively). D20(2) (version pin + separate plugin channel) also landed in `055.W4.1`, but
+deliberately **not** inside this script: a pin is resolved by a *consumer* against an index
+(`../lib/pin.mjs`, `../scripts/resolve-pin.mjs`), not asserted by the publisher, so there is nothing
+for `publish.mjs` to check. What remains genuinely unbuilt here is **D20(3)** — AIOX signing the
+index — which is `055.W4.3`, and **D20(5)** — index freshness (`expires` + a monotonic version),
+which is `055.W5.1` and is also what would give back the ability to repair an already-installed
+artifact.

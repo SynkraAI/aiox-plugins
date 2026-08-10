@@ -113,10 +113,26 @@ stops being true after one edit.
 
 `scripts/check-channel-separation.mjs` runs in CI and refuses any executable file in this repository
 (`lib/`, `publisher/`, `scripts/`, `schema/`, `index/`, `ledger/`) that references a binary-channel
-identifier, plus it refuses a `process.env` read in the resolver itself. The one exemption is the
-frozen `binary_channel_identifiers` list in `lib/pin.mjs` — which *is* the declaration of what must
-not be read, and is the single source the guard itself reads; occurrences there are checked to fall
-inside that array literal, and an occurrence anywhere else in that file is refused like anywhere else.
+identifier, plus it refuses a `process.env` read in the resolver itself.
+
+**Exactly what is exempt, stated precisely** (fix-cycle-1, F4 — the earlier wording here claimed more
+than the code did):
+
+1. **Comment content.** Comments are blanked (offsets preserved, so line numbers stay true) and the
+   guard searches the code that remains. A doc-comment naming an identifier in order to *declare* the
+   separation is legitimate and stays exempt. This replaced a line-prefix check that the QG defeated
+   with one character — a real `readFileSync(".aiox-core-build")` written after a `/*` opener on the
+   same line used to pass. Quote tracking is included so a `//` inside a `"https://…"` string is not
+   mistaken for a comment opener, which would fail in the dangerous direction.
+2. **The frozen `binary_channel_identifiers` list in `lib/pin.mjs`** — which *is* the declaration of
+   what must not be read, and is the single source the guard itself reads. This exemption is a
+   **text-range** check (from `binary_channel_identifiers` to the closing `]),`), not an AST one: an
+   expression placed inside that range would be exempt too. Stated plainly rather than described as
+   tighter than it is. An occurrence anywhere else in that file is refused like anywhere else.
+
+Residual, named: regex literals are not tracked by the comment blanker, so a `/`-initiated regex
+containing `//` could confuse it — in the direction of **over**-reporting (a spurious violation
+someone must look at), never of missing a coupling.
 
 **The guard has its own negative fixture.** `test/pin.test.mjs` plants a coupling in the scanned
 surface, asserts the guard FAILS, removes it, and asserts it goes back to green — a guard only ever

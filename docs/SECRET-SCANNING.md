@@ -18,7 +18,8 @@ that shipped malware all passed human review. The control here is mechanical and
 | the **manifest** (`--manifest`, scanned as raw JSON text) | it becomes a **public catalog entry**; a credential pasted into a `description` is published verbatim |
 | the **artifact** (`--artifact`, its real extracted bytes) | it is what a client downloads and runs |
 
-A finding is a **refusal** — nonzero exit, index untouched, ledger untouched. There is no flag, no
+A finding is a **refusal** — nonzero exit, index untouched, ledger untouched. **So is a member the
+scan could not read** (see §5.1: unscannable ⇒ not publishable, fail-closed). There is no flag, no
 environment variable and no fixture path that disables it. That matches the posture of D24's four
 invariants (`docs/INVARIANTS.md`), and it is asserted by tests rather than promised in prose: every
 covered class has a planted-credential fixture that is pushed through the real CLI as a subprocess
@@ -132,7 +133,7 @@ succeeds**, and asserted by tests. This mirrors the posture `capabilities.limits
 ### (a) It inspects the published manifest and artifact — NOT the target of an MCP pointer
 
 An MCP server in a plugin is a **runtime-resolved pointer**, not an inspectable artifact. The manifest
-supplies `{command, args}` (product repo, `crates/aiox-cockpit/src/mcp.rs:68`), typically
+supplies `{command, args}` (product repo, `crates/aiox-core/src/mcp.rs:68`), typically
 `npx <package>`, resolved against a registry AIOX does not control.
 
 This scan covers **the pointer**. It has never opened, downloaded or executed **the target**, and
@@ -149,16 +150,59 @@ a **shape detector, not a semantic one**.
 
 - **Coverage is a fixed list of providers**, not "secrets" in general (§4).
 - **The corpus does not update itself** — it is a dated snapshot of a named upstream ref.
-- **Binary and oversized members are skipped.** Files with a NUL byte in their head, and files above
-  the 5 MiB cap, are not scanned. They are **counted and listed in every report** (`skipped_binary`,
-  `skipped_too_large`) rather than dropped silently — but *listed* is not *scanned*. A secret inside
-  a nested archive, image metadata, or a compiled binary is not seen.
+- **Binary and oversized members cannot be scanned — and therefore BLOCK the publish** (§5.1).
 - **Symlinks are not followed** — a symlink's target is outside the artifact; scanning it would
   report on the publishing machine's filesystem, not on what ships.
 - **A clean scan is not a security verdict.** It means "no known credential *shape* was found in
   these bytes". It is not a statement that the package is safe, that it does no harm, or that AIOX
   endorses it — the catalog signs the **index** to attest provenance, never the artifact to attest
   endorsement (D20(3)).
+
+### 5.1 Unscannable ⇒ not publishable (fail-closed) — the decision, and what it costs
+
+**The defect this closes, which was executed rather than theorised.** The QG built two artifacts, each
+carrying a real shape-valid AWS key, identical except for a one-line evasion: **(A)** one leading NUL
+byte, so the member reads as binary; **(B)** the same credential followed by >5 MiB of padding, so the
+member exceeds the scan cap. Both were skipped, both reported "Findings: none", both exited **0**.
+AC1 says a package containing a recognisable credential does not publish; these did.
+
+**What was — and was not — wrong about that.** The blindness was *disclosed*: every run printed which
+members were skipped and said "a skipped file is an UNKNOWN, not a pass". So this was never the
+failure this lineage is haunted by (a gate passing green using a tool blind to the defect it was
+meant to catch — that failure is about **undisclosed** blindness). The real gap was smaller and more
+damning: every other trade-off in this deliverable is written down at its decision site, and this one
+was not. It was presented as an unavoidable property of scanning rather than as an alternative that
+had been weighed. **Disclosure is not enforcement.**
+
+**The decision: fail-closed.** `publisher/publish.mjs` and `scripts/scan-secrets.mjs` refuse when any
+member could not be read. A member nobody could read is a member nobody can certify.
+
+**What it costs — named, because "it's free" would be false:**
+
+| Cost | Assessment |
+|---|---|
+| A legitimate binary asset (icon, font, `.wasm`) is refused | Does not exist today — a plugin is skills + scripts + a licence — but it is the case most likely to appear first. |
+| macOS packaging junk (`.DS_Store`, AppleDouble `._*`) is refused | **The likeliest real false refusal**: those files are binary and `tar` on macOS sweeps them in by accident. Arguably the *correct* outcome (that junk has no business in a published artifact), but it will surprise a macOS publisher — so the refusal names the file and says exactly that. |
+| A genuinely large **text** member (>5 MiB) is refused | Refused rather than silently unexamined. |
+
+**Why pay that now:** the catalog has **zero** real entries and is closed to external publishers, so
+today the false-refusal cost is literally zero — which makes this the only moment when tightening the
+rule is free. Same reasoning that made D24 worth ratifying before a catalog existed: these things
+only cost nothing before they exist.
+
+**Why there is no `--allow-unscannable` override**, though the obvious design has one: an override is
+precisely the disable path AC1 forbids and the bypass sweep hunts for, and a flag that lets unread
+bytes through is a flag that will be passed by default in somebody's CI within a quarter. When a
+legitimate binary-asset case actually appears, the answer is a **designed rule** (e.g. an explicit,
+digest-pinned asset allowlist that records which member is exempt and why), decided with a real case
+in hand — not a bypass built speculatively. Tracked in the product repo:
+`docs/backlog/aiox-plugins-scanner-fail-closed-sem-rota-para-asset-binario-legitimo.md`.
+
+**Proven by execution, not by this paragraph.** Both evasions are permanent fixtures
+(`buildArtifactWithNulPrefixedSecret`, `buildArtifactWithOversizedSecret`) pushed through the real CLI
+in `test/publish-cli.test.mjs`, plus a control proving the refusal is about *not being able to look*
+rather than about finding something (a clean binary member with no credential in it also blocks), plus
+the positive control that a clean package still publishes.
 
 ## 6. Relationship to the base grep in CI
 

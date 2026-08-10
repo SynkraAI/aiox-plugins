@@ -93,12 +93,13 @@ jobs:
           echo "OK — analyzer ran end-to-end over a real artifact"
 
       # story 055.W4.1 (D20(1)) — the BLOCKING scanner, exercised end-to-end over real artifacts.
-      # TWO artifacts on purpose: a clean one that must PASS and a planted one that must be REFUSED.
-      # A step that only ever runs the clean case is the exact failure this story names — "a scanner
-      # that passes verde against a clean package proves nothing". The planted credential is
-      # assembled here from fragments so this workflow file never contains a literal credential shape
-      # (which would also trip the base guard immediately below it).
-      - name: Secret scanning refuses a planted credential and passes a clean package (D20(1) — BLOCKING)
+      # THREE artifacts on purpose: a clean one that must PASS, a planted one that must be REFUSED,
+      # and (fix-cycle-1, F2) an UNSCANNABLE one that must also be REFUSED. A step that only ever
+      # runs the clean case is the exact failure this story names — "a scanner that passes verde
+      # against a clean package proves nothing". The planted credential is assembled here from
+      # fragments so this workflow file never contains a literal credential shape (which would also
+      # trip the base guard further down this job).
+      - name: Secret scanning refuses a planted credential, refuses an unscannable member, passes a clean package (D20(1) — BLOCKING)
         run: |
           set -e
           tmp="$(mktemp -d)"
@@ -122,6 +123,20 @@ jobs:
             exit 1
           fi
           echo "OK — planted credential is REFUSED end-to-end"
+
+          # 3. fix-cycle-1 (F2): the SAME credential behind a one-byte NUL prefix. Before the
+          #    fail-closed decision this exited 0 — the member was classified binary, skipped, and
+          #    the artifact published. Unscannable is now treated as not publishable.
+          cp -R "$tmp/clean" "$tmp/unscannable"
+          mkdir -p "$tmp/unscannable/config"
+          printf '\000' > "$tmp/unscannable/config/creds.env"
+          printf 'AWS_ACCESS_KEY_ID=%s%s\n' 'AKIA' 'QRS7TUVWX234YZ56' >> "$tmp/unscannable/config/creds.env"
+          tar -czf "$tmp/unscannable.tar.gz" -C "$tmp/unscannable" .
+          if node scripts/scan-secrets.mjs --artifact "$tmp/unscannable.tar.gz"; then
+            echo "REFUSED: an unscannable member passed — one NUL byte defeats the gate again"
+            exit 1
+          fi
+          echo "OK — unscannable member is REFUSED end-to-end (fail-closed)"
 
       # story 055.W4.1 (AC5) — the plugin channel must never read binary-channel state.
       - name: Plugin channel stays decoupled from the binary channel (D19 / AC5)

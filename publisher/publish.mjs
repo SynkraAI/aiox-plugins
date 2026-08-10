@@ -159,6 +159,20 @@ function main() {
     process.exit(1);
   }
 
+  // fix-cycle-1 (F2) — FAIL-CLOSED on anything the scan could not read. Previously these members
+  // were listed and the publish proceeded, which meant one leading NUL byte (or 5 MiB of padding)
+  // carried a real credential straight through a gate whose whole promise is that it does not.
+  // The full reasoning, the named cost, and why there is deliberately no override flag live at the
+  // decision site in lib/secret-scanner.mjs.
+  if (secretScan.unscannable.length) {
+    console.error(`REFUSED — ${secretScan.unscannable.length} member(s) could NOT be scanned (D20(1)/AC1 — fail-closed):`);
+    for (const u of secretScan.unscannable) console.error(`  - ${u.path} (${u.bytes} bytes) — ${u.why}`);
+    console.error(
+      "A member nobody could read is a member nobody can certify, so it is treated as not publishable. Remove it, or ship it in a scannable form. If this is macOS packaging junk (.DS_Store, AppleDouble ._*), exclude it from the tarball — it has no business in a published artifact. There is no override flag by design: a flag that lets unread bytes through is the disable path this gate exists to not have.",
+    );
+    process.exit(1);
+  }
+
   const emitTiers = args["emit-tiers"]
     ? args["emit-tiers"].split(",").map((t) => t.trim()).filter(Boolean)
     : manifest.tiers;
@@ -228,6 +242,38 @@ function main() {
   console.error(renderCapabilityReport(capabilityReport));
   if (capabilityFindingsAreBlocking() && capabilityReport.union_capabilities.length) {
     console.error("REFUSED — capability findings are blocking (the catalog is open to external publishers)");
+    process.exit(1);
+  }
+
+  // ── fix-cycle-1 (F8) — the artifact must not have changed while we were examining it ───────────
+  //
+  // The artifact is opened several times in this run by design (hashed here, opened by `tar` for the
+  // license check, again for the capability analysis, again for the secret scan) because each check
+  // needs a different view of it. That leaves a window in which the RECORDED digest could describe
+  // different bytes than the ones the checks actually read.
+  //
+  // The window is not CLOSED (that would mean routing every consumer through one snapshot copy, and
+  // those consumers embed the caller's path in their error messages — an operator debugging a
+  // rejected publish would be shown a temp path instead of their own file). It is DETECTED: re-hash
+  // immediately before anything is written, and refuse if it moved. Nothing is committed to the
+  // index or the ledger on a changed artifact.
+  //
+  // Residual, named rather than implied: an attacker who can write to the publish machine mid-run
+  // could also restore the original bytes before this check. That attacker already owns the artifact
+  // outright, so this defends against the accidental/racy case — a rebuild landing mid-publish —
+  // which is the one that actually happens.
+  //
+  // TEST BOUNDARY, stated because this story's standard is executed-not-asserted and this one check
+  // is not: there is no fixture for this refusal. Triggering it requires mutating the artifact
+  // BETWEEN two reads inside a single CLI invocation, which cannot be done deterministically from a
+  // subprocess test without instrumenting the CLI — and a timing-dependent test would be a flaky
+  // test, which is worse than an absent one. What the suite does prove is that adding this check
+  // refuses nothing it should not (every publish fixture still passes).
+  const digestAfterChecks = sha256File(args.artifact);
+  if (digestAfterChecks !== digestValue) {
+    console.error(
+      `REFUSED — the artifact changed while it was being verified: hashed ${digestValue} at the start, ${digestAfterChecks} now. Every check above examined bytes that are no longer the bytes on disk, so none of their results can be trusted. Re-run the publish against a stable artifact.`,
+    );
     process.exit(1);
   }
 

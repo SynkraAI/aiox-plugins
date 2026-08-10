@@ -11,7 +11,7 @@
 // `limits` array — the blind spots travel with the result by construction, in every output mode).
 
 import { existsSync } from "node:fs";
-import { scanArtifact, scanManifestFile, renderScanReport } from "../lib/secret-scanner.mjs";
+import { scanArtifact, scanManifestFile, renderScanReport, unscannableMembers } from "../lib/secret-scanner.mjs";
 
 function usageAndExit(msg) {
   if (msg) console.error(`error: ${msg}\n`);
@@ -37,15 +37,24 @@ if (args.manifest) reports.push(scanManifestFile(args.manifest));
 if (args.artifact) reports.push(scanArtifact(args.artifact));
 
 const findings = reports.flatMap((r) => r.findings);
+// fix-cycle-1 (F2): the CLI and publisher/publish.mjs must agree on what refuses, or CI would pass
+// an artifact the publish path rejects (and, worse, the reverse).
+const unscannable = reports.flatMap((r) => unscannableMembers(r));
 
 if (args.json) {
-  console.log(JSON.stringify({ reports, findings_total: findings.length }, null, 2));
+  console.log(JSON.stringify({ reports, findings_total: findings.length, unscannable_total: unscannable.length }, null, 2));
 } else {
   for (const r of reports) console.log(renderScanReport(r));
 }
 
 if (findings.length) {
   console.error(`\nREFUSED — ${findings.length} credential(s) found (BLOCKING, D20(1)/AC1)`);
+  process.exit(1);
+}
+if (unscannable.length) {
+  console.error(`\nREFUSED — ${unscannable.length} member(s) could NOT be scanned (fail-closed, D20(1)/AC1):`);
+  for (const u of unscannable) console.error(`  - ${u.path} (${u.bytes} bytes) — ${u.why}`);
+  console.error("Unscannable is treated as not publishable. See lib/secret-scanner.mjs's decision site for why there is no override.");
   process.exit(1);
 }
 console.error("\nOK — no credential of any covered class found (read the limits above before reading this as a safety verdict)");

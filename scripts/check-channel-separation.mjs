@@ -49,9 +49,60 @@ function declarationRegion(text) {
   return [start, end + 3];
 }
 
-function isCommentLine(line) {
-  const t = line.trim();
-  return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*");
+// fix-cycle-1 (F4). The previous exemption was LINE-PREFIX textual — "does this line start with
+// `//`, `*` or `/*`?" — and the QG defeated it with one character: a real coupling written as
+// `/* probe */ const s = readFileSync(".aiox-core-build", …)` passed the guard, while the identical
+// read on an ordinary line was caught. A guard with a one-character bypass is precisely the
+// anti-pattern this story spends its whole argument on.
+//
+// The exemption is now applied to COMMENT CONTENT rather than to whole lines: comments are blanked
+// out (preserving offsets, so reported line numbers stay true) and the guard searches what is LEFT,
+// which is code. A doc-comment that names an identifier in order to declare the separation is still
+// exempt — that is legitimate and there are several — but code hiding behind a comment opener on the
+// same line is not, because after blanking the comment the code is still there.
+//
+// Quote tracking is included because a naive stripper would treat the `//` in a `"https://…"` string
+// literal as a comment opener and blank the REST OF THE LINE — which fails in the dangerous
+// direction (a real coupling after a URL would vanish). Regex literals are NOT tracked; a `/` that
+// begins a regex containing `//` could still confuse this. That residual is stated rather than
+// hidden, and it fails toward over-reporting (a spurious violation someone must look at), never
+// toward missing a coupling.
+function blankComments(text) {
+  const out = text.split("");
+  let i = 0;
+  let state = "code"; // code | line | block | single | double | template
+  while (i < text.length) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (state === "code") {
+      if (c === "/" && n === "/") { state = "line"; out[i] = " "; out[i + 1] = " "; i += 2; continue; }
+      if (c === "/" && n === "*") { state = "block"; out[i] = " "; out[i + 1] = " "; i += 2; continue; }
+      if (c === "'") state = "single";
+      else if (c === '"') state = "double";
+      else if (c === "`") state = "template";
+      i++;
+      continue;
+    }
+    if (state === "line") {
+      if (c === "\n") { state = "code"; i++; continue; }
+      out[i] = " ";
+      i++;
+      continue;
+    }
+    if (state === "block") {
+      if (c === "*" && n === "/") { state = "code"; out[i] = " "; out[i + 1] = " "; i += 2; continue; }
+      if (c !== "\n") out[i] = " ";
+      i++;
+      continue;
+    }
+    // inside a string/template: only the matching terminator (unescaped) ends it
+    if (c === "\\") { i += 2; continue; }
+    if ((state === "single" && c === "'") || (state === "double" && c === '"') || (state === "template" && c === "`")) {
+      state = "code";
+    }
+    i++;
+  }
+  return out.join("");
 }
 
 const files = SCAN_DIRS.flatMap((d) => {
@@ -63,18 +114,20 @@ let occurrencesInDeclaration = 0;
 
 for (const file of files) {
   const rel = relative(root, file).split("\\").join("/");
-  const text = readFileSync(file, "utf8");
-  const region = rel === DECLARATION_FILE ? declarationRegion(text) : null;
-  const lines = text.split(/\r?\n/);
+  const raw = readFileSync(file, "utf8");
+  // Comments blanked, offsets preserved — so `code` and `raw` agree on every index and line number.
+  const code = rel.endsWith(".json") ? raw : blankComments(raw);
+  const region = rel === DECLARATION_FILE ? declarationRegion(raw) : null;
+  const lines = raw.split(/\r?\n/);
 
   for (const id of CHANNEL.binary_channel_identifiers) {
-    let idx = text.indexOf(id);
+    let idx = code.indexOf(id);
     while (idx !== -1) {
-      const line = text.slice(0, idx).split(/\r?\n/).length;
+      const line = raw.slice(0, idx).split(/\r?\n/).length;
       const inRegion = region && idx >= region[0] && idx < region[1];
       if (inRegion) occurrencesInDeclaration++;
-      else if (!isCommentLine(lines[line - 1] ?? "")) violations.push({ rel, line, id, text: (lines[line - 1] ?? "").trim().slice(0, 160) });
-      idx = text.indexOf(id, idx + id.length);
+      else violations.push({ rel, line, id, text: (lines[line - 1] ?? "").trim().slice(0, 160) });
+      idx = code.indexOf(id, idx + id.length);
     }
   }
 }

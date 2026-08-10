@@ -19,6 +19,9 @@ import {
   redact,
   renderScanReport,
   SCANNER_LIMITS,
+  UNSCANNABLE_IS_BLOCKING,
+  unscannableMembers,
+  MAX_SCANNED_FILE_BYTES,
 } from "../lib/secret-scanner.mjs";
 import {
   SECRET_CLASSES,
@@ -147,6 +150,35 @@ describe("what was NOT scanned is reported, never silently dropped", () => {
     assert.equal(report.skipped_binary[0].path, "assets/blob.bin");
     assert.match(renderScanReport(report), /a skipped file is an UNKNOWN, not a pass/);
     assert.match(renderScanReport(report), /\[binary\] {4}assets\/blob\.bin/);
+
+    // fix-cycle-1 (F2), the library half: "not scanned" must be surfaced as a BLOCKING fact, not
+    // merely as a line in a report the caller is free to ignore. The CLI-level proof that this
+    // actually refuses a publish lives in test/publish-cli.test.mjs.
+    assert.equal(UNSCANNABLE_IS_BLOCKING, true);
+    const unscannable = unscannableMembers(report);
+    assert.equal(unscannable.length, 1);
+    assert.equal(unscannable[0].path, "assets/blob.bin");
+    assert.match(unscannable[0].why, /NUL byte/);
+    assert.match(renderScanReport(report), /an UNKNOWN is BLOCKING/);
+  });
+
+  test("an oversized member is unscannable too, and reported with its size (the second evasion)", () => {
+    const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+    const tar = buildTarball({
+      LICENSE: "MIT\n",
+      "SKILL.md": FIXTURE_SKILL,
+      "config/creds.env": planted.render() + "#".repeat(MAX_SCANNED_FILE_BYTES + 1),
+    });
+    const report = scanArtifact(tar);
+    assert.equal(report.findings.length, 0, "the oversized member was never read");
+    assert.equal(report.skipped_too_large.length, 1);
+    const unscannable = unscannableMembers(report);
+    assert.equal(unscannable.length, 1);
+    assert.match(unscannable[0].why, /larger than the \d+-byte scan cap/);
+  });
+
+  test("a clean package has NOTHING unscannable — fail-closed cannot be satisfied by refusing everything", () => {
+    assert.equal(unscannableMembers(scanArtifact(buildCleanArtifact())).length, 0);
   });
 
   test("the limits are attached to EVERY report and name the two the story requires", () => {
@@ -154,7 +186,21 @@ describe("what was NOT scanned is reported, never silently dropped", () => {
     assert.ok(report.limits.length >= 2);
     const joined = report.limits.join("\n");
     assert.match(joined, /POINTER, NOT THE TARGET/, "limit (a) — the MCP pointer is not the target");
-    assert.match(joined, /mcp\.rs:68/, "limit (a) must cite the code, not gesture at it");
+    // fix-cycle-1 (F1): this assertion used to be `/mcp\.rs:68/` — a substring so loose that it
+    // matched a citation naming the WRONG CRATE (`crates/aiox-cockpit/src/mcp.rs`, a file that does
+    // not exist) and shipped it inside the string printed on every run. The test written to keep the
+    // story's central honesty claim checkable could not catch an unverifiable citation, which is the
+    // worst possible shape for it. It now pins the FULL path.
+    assert.match(
+      joined,
+      /crates\/aiox-core\/src\/mcp\.rs:68/,
+      "limit (a) must cite the FULL, resolvable path — a reader who follows it must land on a real file",
+    );
+    assert.doesNotMatch(
+      joined,
+      /aiox-cockpit\/src\/mcp\.rs/,
+      "the crate is aiox-core; aiox-cockpit has no mcp.rs (F1)",
+    );
     assert.match(joined, /OBFUSCATED OR ENCODED SECRET ESCAPES/, "limit (b)");
     assert.match(renderScanReport(report), /WHAT THIS SCAN CANNOT SEE/);
   });
