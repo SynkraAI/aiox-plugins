@@ -239,7 +239,8 @@ one readable regular file is **unscannable**, and therefore refused by the path 
 | Member kind | Treatment |
 |---|---|
 | regular file, unique path | scanned |
-| **directory** | structural — carries no bytes, present in every normal artifact, **not** refused (a fix that refused these would refuse everything) |
+| **directory** — *positively identified*: rendered type `d` **and** size exactly 0 | structural — carries no bytes, present in every normal artifact, **not** refused (a fix that refused these would refuse everything) |
+| **directory-shaped but carrying data** (or whose size cannot be determined) | refused — §5.3 |
 | **duplicate path** | refused — extraction keeps only the last, so an earlier member's bytes ship without ever existing on disk to be read |
 | **non-regular** (symlink, hardlink, FIFO, socket, device) | refused — enumerated rather than dropped before counting |
 | **absolute or `..`-escaping path** | refused — cannot be mapped to a file inside the package root |
@@ -255,7 +256,11 @@ because the lesson of §5.1 is that an undeclared blind spot is the disqualifyin
    implementation reads differently — extra, ignored or ambiguous headers, PAX vs ustar
    disagreements — could present a consumer with members this scan never saw. Nothing here detects
    that. It is an adversarial construction, and it matters most at the same moment §5.1's residual
-   does: when the catalog opens to external publishers.
+   does: when the catalog opens to external publishers. **Scope, stated precisely because it was
+   misread once:** this covers *disagreement between parses*. It does **not** cover a member this
+   parse itself misclassifies — that is a defect, not a residual, and one such defect (F14) was found
+   and fixed in §5.3. The remedy for both, if this area is ever worked again, is a real tar reader
+   instead of parsing CLI output.
 2. **Structure, not content.** The table cannot tell that an ordinary-looking member is itself a
    nested archive whose contents are never opened.
 3. **Unenumerable archives are refused outright.** If the two listings disagree on member count (a
@@ -267,6 +272,60 @@ which first asserts the credential really *is* recoverable from the archive, so 
 cannot pass for the wrong reason — the symlink artifact, a `files_total` honesty check (3 reported as
 3), the positive control that a clean package still publishes, and a control that directories are not
 refused.
+
+### 5.3 The classifier is an ALLOWLIST — exemption requires positive evidence (fix-cycle-3, F14)
+
+**Executed by the QG, and reproduced here before the fix.** A hand-forged ustar member with typeflag
+`0` (**regular file**) whose **name ends in `/`**, carrying 39 bytes with a shape-valid AWS key:
+
+```
+$ tar -tvzf forged.tar.gz
+-rw-r--r--  0 0 0    4 Aug 10 01:48 ./LICENSE
+-rw-r--r--  0 0 0   51 Aug 10 01:48 ./SKILL.md
+drw-r--r--  0 0 0   39 Aug 10 01:48 ./config/payload/     ← rendered `d`, but 39 bytes of DATA
+$ tar -xOzf forged.tar.gz ./config/payload/
+AWS_ACCESS_KEY_ID=AKIA…                                    ← same tar, same machine
+```
+
+Before the fix: `2/2 file(s) scanned`, `Findings: none`, **exit 0**. The member was excluded from
+classification *before* any refusal logic could run.
+
+**This is not the declared parser-differential residual.** That residual is about *different* tar
+implementations disagreeing. Here one implementation is enough to recover the credential, so it was a
+classification bug in this parse — a genuine finding, not a disclosed limit.
+
+**The root cause was the shape of the rule, not the missing case.** The old pre-filter asked what a
+member *looks like* and exempted on resemblance: `type !== "d" && !name.endsWith("/")`. Anything
+resembling a directory inherited the directory exemption **regardless of what it carried**. Over a
+format as old and permissive as tar, a denylist keeps producing findings — three cycles running, each
+closed the demonstrated instance and left an undemonstrated one.
+
+So the question is inverted:
+
+| | |
+|---|---|
+| **Old (denylist)** | "is this member excluded from classification?" → exempt on **resemblance** |
+| **New (allowlist)** | "can this member be **positively identified** as one of two known-safe things?" → everything else, **including anything unrecognised**, is unscannable and refuses |
+
+The two positively-identified categories, and nothing else:
+
+- **Directory** — rendered type `d` **and** a size that is **known and exactly 0**. A real directory
+  carries no data. A member rendered as a directory with non-zero size is anomalous by construction.
+  If the size cannot be parsed at all, that is **not** a pass either: an unverifiable claim to be a
+  directory is unscannable, because the whole point of the inversion is that **exemption requires
+  positive evidence**.
+- **Ordinary file** — rendered type `-`/`0`, name not ending in `/`, safe path, unique among content
+  members, mappable to exactly one extracted regular file.
+
+**Directories must stay exempt**, and that is the one thing this inversion cannot tighten: refusing
+them would refuse *every* package built the normal way (`tar -czf x.tgz -C dir .`). That carve-out is
+pinned by its own control test, alongside a test of the allowlist property itself (a directory whose
+size is unknown refuses; a directory carrying data refuses; an ordinary file still reads).
+
+**Fixtures:** the forged archive is a permanent fixture that first asserts the archive is **valid**
+and the credential **really is recoverable** from it — the second engine's own attempt at this probe
+produced a *damaged* archive that yielded only NUL bytes, i.e. an unproven assertion dressed as a
+finding, which is worth remembering before trusting a probe nobody ran.
 
 ## 6. Relationship to the base grep in CI
 

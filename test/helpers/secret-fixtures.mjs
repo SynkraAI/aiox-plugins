@@ -228,6 +228,60 @@ export function buildArtifactWithSymlinkMember() {
   }
 }
 
+// ── fix-cycle-3 (F14) — a member that PRESENTS as a directory while carrying file data ───────────
+//
+// This one cannot be produced by any standard tar tool, which is precisely why it needs a forged
+// header: `tar` will not create a regular-file member whose name ends in `/`. The archive below is a
+// valid ustar stream (correct header checksum — the second engine's own attempt produced a DAMAGED
+// archive and therefore proved nothing, which is worth remembering before trusting a probe that was
+// not run).
+//
+// The member is typeflag '0' (REGULAR FILE) named `./config/payload/` carrying a shape-valid AWS
+// key. `tar -tvzf` renders it as type `d` because bsdtar prints any trailing-slash name as a
+// directory — so a classifier that exempts on APPEARANCE lets it through, while
+// `tar -xOzf artifact.tar.gz ./config/payload/` prints the credential from the published bytes with
+// the same tar on the same machine.
+
+function ustarHeader(name, size, typeflag) {
+  const b = Buffer.alloc(512, 0);
+  const put = (s, off, len) => b.write(String(s).slice(0, len), off, len, "ascii");
+  const oct = (n, len) => n.toString(8).padStart(len - 1, "0") + "\0";
+  put(name, 0, 100);
+  put(oct(0o644, 8), 100, 8);
+  put(oct(0, 8), 108, 8);
+  put(oct(0, 8), 116, 8);
+  put(oct(size, 12), 124, 12);
+  put(oct(Math.floor(Date.now() / 1000), 12), 136, 12);
+  b.write("        ", 148, 8, "ascii"); // checksum field counts as spaces while summing
+  put(typeflag, 156, 1);
+  b.write("ustar\0", 257, 6, "ascii");
+  b.write("00", 263, 2, "ascii");
+  let sum = 0;
+  for (const byte of b) sum += byte;
+  b.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, 8, "ascii");
+  return b;
+}
+
+function ustarMember(name, data, typeflag) {
+  const buf = Buffer.from(data);
+  const pad = Buffer.alloc((512 - (buf.length % 512)) % 512, 0);
+  return Buffer.concat([ustarHeader(name, buf.length, typeflag), buf, pad]);
+}
+
+export function buildArtifactWithDirectoryShapedFileMember() {
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  const outDir = mkdtempSync(join(tmpdir(), "aiox-plugins-forged-"));
+  const tar = Buffer.concat([
+    ustarMember("./LICENSE", "MIT License\n\nCopyright (c) AIOX\n", "0"),
+    ustarMember("./SKILL.md", FIXTURE_SKILL, "0"),
+    ustarMember("./config/payload/", planted.render(), "0"), // typeflag '0' + trailing-slash name
+    Buffer.alloc(1024, 0), // two zero blocks terminate the archive
+  ]);
+  const gz = join(outDir, "artifact.tar.gz");
+  writeFileSync(gz, gzipSync(tar));
+  return gz;
+}
+
 // The positive control (AC2's second half): the SAME package shape with no credential in it. If this
 // one is also refused, the gate is a blanket refusal and every negative result above proves nothing.
 export function buildCleanArtifact() {
