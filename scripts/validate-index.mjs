@@ -47,12 +47,30 @@ export function validateIndexData(data, label) {
   }
 
   // D24(a)/(b) base guard, replicated here so a hand-edit can't bypass what publish.mjs enforces:
-  // no two entries with the same plugin_id+version but different digests.
+  // no two entries with the same plugin_id+version.
+  //
+  // fix-cycle-2 (F13) — this used to fire ONLY when the duplicates' digests CONFLICTED, while
+  // lib/pin.mjs (tightened in fix-cycle-1 for F5) refuses ANY duplicate. The QG executed the
+  // divergence: an index with two same-digest entries for `dup@1.0.0`, differing only in `tiers`,
+  // passed `validate-index` with 0 violations and was then REFUSED by `resolvePin`. Green in CI,
+  // unresolvable in use — which fails closed, so nothing unsafe ships, but it reads as a bug to
+  // whoever hits it and it means two parts of this repo disagree about whether the same file is
+  // valid.
+  //
+  // The two are now the same rule. Deliberately NOT done by having pin.mjs import this module: that
+  // module stays dependency-light on purpose (it must resolve against any index that declares itself
+  // valid, including a future schema version). The anti-drift device is a test that runs BOTH over
+  // the same fixture and asserts they agree — see test/pin.test.mjs, "F13".
   const seen = new Map();
   for (const e of data.entries) {
     const key = `${e.plugin_id}@${e.version}`;
-    if (seen.has(key) && seen.get(key) !== e.digest?.value) {
-      errors.push(`${label}: duplicate ${key} with conflicting digest — D24 immutability violated`);
+    if (seen.has(key)) {
+      const sameDigest = seen.get(key) === e.digest?.value;
+      errors.push(
+        sameDigest
+          ? `${label}: duplicate ${key} — two entries share this plugin_id@version with the same digest but potentially differing metadata (tiers/mirror_url). Resolution would depend on entry ORDER, and \`tiers\` is the entitlement axis, so lib/pin.mjs refuses it; CI refuses it here for the same reason`
+          : `${label}: duplicate ${key} with conflicting digest — D24 immutability violated`,
+      );
     }
     seen.set(key, e.digest?.value);
   }

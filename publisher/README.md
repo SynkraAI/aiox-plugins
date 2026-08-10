@@ -120,10 +120,12 @@ gate) so publish-time and CI-time checks can never drift apart:
   in the **manifest** (which becomes a public catalog entry) or in the **artifact's real bytes**,
   using a vendored subset of gitleaks' rule corpus (`../lib/secret-rules.mjs` — 14 rules / 14 classes,
   each with a negative fixture through this very CLI). **Also refuses when a member could not be
-  scanned at all** — binary or over the size cap — because unscannable is treated as not publishable
-  (fail-closed; see `../docs/SECRET-SCANNING.md` §5.1 for the decision, its named cost, and why there
-  is deliberately no override flag). What the scan can and cannot see is printed on **every** run,
-  including a successful one.
+  scanned at all** — binary, over the size cap, a **duplicate/shadowed member path**, a non-regular
+  member (symlink/hardlink/FIFO/socket/device), or a path escaping the package root — because
+  unscannable is treated as not publishable (fail-closed; see `../docs/SECRET-SCANNING.md` §5.1 for
+  the decision, its named cost, and why there is deliberately no override flag, and §5.2 for why the
+  inventory comes from the archive's **member table** rather than from the extracted tree). What the
+  scan can and cannot see is printed on **every** run, including a successful one.
 
 All of the above are BLOCKING, unconditionally — no flag/env var/branch disables any of them
 (AC4/AC6; see the story's handoff for the literal bypass-grep command + output).

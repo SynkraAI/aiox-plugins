@@ -130,9 +130,21 @@ than the code did):
    expression placed inside that range would be exempt too. Stated plainly rather than described as
    tighter than it is. An occurrence anywhere else in that file is refused like anywhere else.
 
-Residual, named: regex literals are not tracked by the comment blanker, so a `/`-initiated regex
-containing `//` could confuse it — in the direction of **over**-reporting (a spurious violation
-someone must look at), never of missing a coupling.
+**Residual, corrected in fix-cycle-2 (F12).** The previous wording here claimed regex confusion could
+only ever cause **over**-reporting, "never missing a coupling". **That was false**, and the QG
+executed the counterexample: `const re = /[/*]/;` on the line before a real
+`readFileSync(".aiox-core-build")` passed the guard, because the `/*` inside the character class
+opened block-comment state and erased the coupling. (Under the older line-prefix logic that same
+construction *was* caught, so it was a regression introduced by this very fix.)
+
+It is now **fixed**, not merely documented, by two independent measures: regex literals in
+regex-start position are recognised and consumed as code, and an **unterminated** block comment is
+treated as a parse failure that falls back to scanning the raw text — which over-reports, the safe
+direction, and would have caught F12 on its own.
+
+What genuinely remains: a regex literal that the start-position heuristic misclassifies as division
+**and** which contains a *balanced* `/* … */` could still blank real code. That is narrower than the
+hole F12 exercised, but it is not impossible, and this document no longer says it is.
 
 **The guard has its own negative fixture.** `test/pin.test.mjs` plants a coupling in the scanned
 surface, asserts the guard FAILS, removes it, and asserts it goes back to green — a guard only ever

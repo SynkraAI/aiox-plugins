@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsePin, resolvePin, resolvePinFromFile, verifyBytesAgainstPin, renderResolution, PIN_COST, CHANNEL } from "../lib/pin.mjs";
+import { validateIndexData } from "../scripts/validate-index.mjs";
 import { buildValidArtifact, buildTarball, fixtureSkill } from "./helpers/tarball.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,43 @@ describe("AC4 — the pin is deterministic: same pin ⇒ same digest ⇒ same by
     }
   });
 
+  // fix-cycle-2 (F13). The F5 tightening moved the RESOLVER and left the VALIDATOR behind, so an
+  // index could be green in CI and unresolvable in use. This test is the anti-drift device: it runs
+  // BOTH over the same data and asserts they agree, in both directions — so a future edit that
+  // loosens one without the other fails here rather than in somebody's console.
+  test("F13 — CI's validator and the resolver agree about duplicates, in both directions", () => {
+    const base = {
+      schema_version: "2.0.0",
+      plugin_id: "dup",
+      lineage_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      name: "dup",
+      description: "d",
+      version: "1.0.0",
+      digest: { algorithm: "sha256", value: "a".repeat(64) },
+      artifact: {
+        mirror_url: `https://${GOOD_HOST}/plugins/dup/1.0.0/x.tar.gz`,
+        r2_key: "plugins/dup/1.0.0/x.tar.gz",
+      },
+      publisher: { subject: "acct_test" },
+      published_at: "2026-08-10T00:00:00.000Z",
+      license: { spdx_or_path: "MIT" },
+    };
+    // Same digest, differing only in `tiers` — the exact construction the QG executed.
+    const dupData = { schema_version: "2.0.0", entries: [{ ...base, tiers: ["base"] }, { ...base, tiers: ["forjar"] }] };
+
+    const validatorErrors = validateIndexData(dupData, "fixture");
+    assert.ok(
+      validatorErrors.some((e) => /duplicate dup@1\.0\.0/.test(e)),
+      "the validator must refuse what the resolver refuses (it returned 0 violations before fix-cycle-2)",
+    );
+    assert.throws(() => resolvePin(dupData, "dup@1.0.0"), /REFUSED: 2 entries share this plugin_id@version/);
+
+    // ...and both accept the single-entry version, so the agreement is not "both refuse everything".
+    const okData = { schema_version: "2.0.0", entries: [{ ...base, tiers: ["base"] }] };
+    assert.deepEqual(validateIndexData(okData, "fixture"), []);
+    assert.equal(resolvePin(okData, "dup@1.0.0").digest.value, "a".repeat(64));
+  });
+
   // fix-cycle-1 (F6). A missing `digest.algorithm` used to resolve as sha256 by assumption.
   test("F6 — an entry with no digest.algorithm is REFUSED, not assumed to be sha256", () => {
     const data = {
@@ -260,6 +298,43 @@ describe("AC5 — the plugin channel is separate from the binary channel, proven
       );
       const out = execFileSync("node", [channelGuard], { stdio: "pipe" }).toString();
       assert.match(out, /OK — no executable file/);
+    } finally {
+      if (existsSync(planted)) unlinkSync(planted);
+    }
+  });
+
+  // fix-cycle-2 (F12) — a regression the F4 fix itself introduced, and the reason it is fixed rather
+  // than merely documented: the F4 comment CLAIMED regex confusion could only ever over-report, and
+  // this construction proved that false. Under the pre-F4 line-prefix logic it was caught; under the
+  // first blanker it passed. Both the regex recognition and the unterminated-block fallback are
+  // exercised by this one fixture.
+  test("F12 — a regex literal containing `/*` no longer hides the coupling on the next line", () => {
+    const planted = join(repoRoot, "scripts", "__channel-regex-evasion-fixture.mjs");
+    try {
+      writeFileSync(
+        planted,
+        'const re = /[/*]/;\nconst s = readFileSync(".aiox-core-build", "utf8");\nexport default [re, s];\n',
+      );
+      let stderr = "";
+      try {
+        execFileSync("node", [channelGuard], { stdio: "pipe" });
+        assert.fail("expected the guard to REFUSE — this construction passed after the F4 fix");
+      } catch (e) {
+        stderr = String(e.stderr ?? "");
+      }
+      assert.match(stderr, /__channel-regex-evasion-fixture\.mjs/);
+      assert.match(stderr, /\[\.aiox-core-build\]/);
+    } finally {
+      if (existsSync(planted)) unlinkSync(planted);
+    }
+  });
+
+  test("F12 — a regex literal is NOT mistaken for a comment either (no false positive from the fix)", () => {
+    // The opposite failure: a fix that flagged every file containing a regex would also "close" F12.
+    const planted = join(repoRoot, "scripts", "__channel-regex-benign-fixture.mjs");
+    try {
+      writeFileSync(planted, 'const re = /[/*]/;\nconst ok = re.test("x");\nexport default ok;\n');
+      assert.match(execFileSync("node", [channelGuard], { stdio: "pipe" }).toString(), /OK — no executable file/);
     } finally {
       if (existsSync(planted)) unlinkSync(planted);
     }

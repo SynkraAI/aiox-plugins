@@ -63,23 +63,79 @@ function declarationRegion(text) {
 //
 // Quote tracking is included because a naive stripper would treat the `//` in a `"https://…"` string
 // literal as a comment opener and blank the REST OF THE LINE — which fails in the dangerous
-// direction (a real coupling after a URL would vanish). Regex literals are NOT tracked; a `/` that
-// begins a regex containing `//` could still confuse this. That residual is stated rather than
-// hidden, and it fails toward over-reporting (a spurious violation someone must look at), never
-// toward missing a coupling.
+// direction (a real coupling after a URL would vanish).
+//
+// fix-cycle-2 (F12) — A REGRESSION THIS FUNCTION ITSELF INTRODUCED, and the honest framing matters:
+// the round-1 version of this comment claimed regex confusion "fails toward over-reporting … never
+// toward missing a coupling". **That claim was false**, and the QG executed the counterexample:
+// `const re = /[/*]/;` followed on the next line by a real `readFileSync(".aiox-core-build")` passed
+// the guard with exit 0. The `/*` inside the character class opened block-comment state and erased
+// the coupling. Under the OLD line-prefix logic that same construction WAS caught. On a story whose
+// subject is inaccurate claims about a control's strength, an inaccurate claim about this control's
+// strength is the specific error under review — so it is FIXED here, and what remains is described
+// as it actually behaves rather than as I would like it to behave.
+//
+// TWO INDEPENDENT MEASURES, because one heuristic guarding a guard is not enough:
+//
+//   1. REGEX LITERALS ARE RECOGNISED. A `/` in regex-start position (the previous meaningful
+//      character is an operator, opener, or a keyword like `return` — never an identifier, `)` or
+//      `]`, which mean division) consumes to its unescaped closing `/`, honouring `[...]` classes.
+//      The `//` and `/*` checks run FIRST, so an ordinary comment after `;` is still a comment and
+//      not mistaken for a regex.
+//   2. AN UNTERMINATED BLOCK COMMENT IS TREATED AS A PARSE FAILURE. If block state is entered and
+//      never closed before EOF, this function returns the RAW text, so the guard searches everything
+//      including comments. That over-reports (a doc-comment mention becomes a violation someone must
+//      look at) — which is the safe direction — and it is precisely what would have caught F12 even
+//      if measure 1 had missed, since `/[/*]/` opens a block that is never closed.
+//
+// THE RESIDUAL, stated accurately this time: a regex literal that measure 1 misclassifies as
+// division AND that contains a BALANCED `/* … */` could still blank real code. That is narrower than
+// the hole F12 exercised, but it is not "impossible", and this comment no longer says it is.
 function blankComments(text) {
   const out = text.split("");
   let i = 0;
   let state = "code"; // code | line | block | single | double | template
+  let lastMeaningful = "";
+
+  // A `/` starts a regex literal when what precedes it cannot END an expression. Identifiers,
+  // numbers, `)` and `]` can, so a `/` after those is division.
+  const REGEX_START_AFTER = new Set(["", "=", "(", ",", "[", "{", ";", ":", "!", "&", "|", "?", "+", "-", "*", "%", "^", "~", "<", ">", "\n"]);
+  const KEYWORD_BEFORE_REGEX = /\b(?:return|typeof|instanceof|in|of|case|do|else|void|delete|yield|await)$/;
+
   while (i < text.length) {
     const c = text[i];
     const n = text[i + 1];
     if (state === "code") {
+      // Comment openers are checked BEFORE the regex heuristic: `x;` followed by `// note` must stay
+      // a comment. This ordering is also why measure 1 is safe — at the first `/` of `/[/*]/` the
+      // next character is `[`, so neither comment branch fires and the regex branch gets its turn.
       if (c === "/" && n === "/") { state = "line"; out[i] = " "; out[i + 1] = " "; i += 2; continue; }
       if (c === "/" && n === "*") { state = "block"; out[i] = " "; out[i + 1] = " "; i += 2; continue; }
+      if (c === "/") {
+        const before = text.slice(0, i);
+        const canBeRegex = REGEX_START_AFTER.has(lastMeaningful) || KEYWORD_BEFORE_REGEX.test(before.trimEnd());
+        if (canBeRegex) {
+          // Consume the literal verbatim — it is code, it stays.
+          let j = i + 1;
+          let inClass = false;
+          while (j < text.length) {
+            const rc = text[j];
+            if (rc === "\\") { j += 2; continue; }
+            if (rc === "\n") break;              // an unterminated literal is not a regex; bail out
+            if (rc === "[") inClass = true;
+            else if (rc === "]") inClass = false;
+            else if (rc === "/" && !inClass) { j++; break; }
+            j++;
+          }
+          lastMeaningful = "/";
+          i = j;
+          continue;
+        }
+      }
       if (c === "'") state = "single";
       else if (c === '"') state = "double";
       else if (c === "`") state = "template";
+      if (!/\s/.test(c)) lastMeaningful = c;
       i++;
       continue;
     }
@@ -99,9 +155,15 @@ function blankComments(text) {
     if (c === "\\") { i += 2; continue; }
     if ((state === "single" && c === "'") || (state === "double" && c === '"') || (state === "template" && c === "`")) {
       state = "code";
+      lastMeaningful = c;
     }
     i++;
   }
+
+  // Measure 2 — a block comment that never closes means this function's model of the file is wrong.
+  // Return the RAW text so the guard searches everything: over-reporting is recoverable (a human
+  // looks at a flagged doc-comment), under-reporting is the failure F12 was.
+  if (state === "block") return text;
   return out.join("");
 }
 
