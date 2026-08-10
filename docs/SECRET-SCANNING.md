@@ -261,11 +261,15 @@ because the lesson of §5.1 is that an undeclared blind spot is the disqualifyin
    parse itself misclassifies — that is a defect, not a residual, and one such defect (F14) was found
    and fixed in §5.3. The remedy for both, if this area is ever worked again, is a real tar reader
    instead of parsing CLI output.
+   > **Superseded by §5.4 (fix-cycle-4).** The remedy this paragraph names is the one that was built.
+   > A differential between the two parses is now *detected* and refused by name in both directions,
+   > and the first thing it found was not adversarial at all: macOS AppleDouble members, which `tar`
+   > hides from its own listing. What remains of this residual is narrower — see §5.4.
 2. **Structure, not content.** The table cannot tell that an ordinary-looking member is itself a
    nested archive whose contents are never opened.
-3. **Unenumerable archives are refused outright.** If the two listings disagree on member count (a
-   member name containing a newline is the realistic cause), the whole artifact is refused rather
-   than guessed at — fail-closed, but it means such an archive cannot be published at all.
+3. **Unenumerable archives are refused outright.** If the archive cannot be walked cleanly, the whole
+   artifact is refused rather than guessed at — fail-closed, but it means such an archive cannot be
+   published at all. (fix-cycle-4 widened *and* sharpened this: see §5.4.)
 
 **Fixtures** (`test/publish-cli.test.mjs`, through the real CLI): the shadowed-duplicate artifact —
 which first asserts the credential really *is* recoverable from the archive, so a later refusal
@@ -326,6 +330,78 @@ size is unknown refuses; a directory carrying data refuses; an ordinary file sti
 and the credential **really is recoverable** from it — the second engine's own attempt at this probe
 produced a *damaged* archive that yielded only NUL bytes, i.e. an unproven assertion dressed as a
 finding, which is worth remembering before trusting a probe nobody ran.
+
+### 5.4 Classification reads the ustar HEADER, not `tar`'s rendered listing (fix-cycle-4, F17)
+
+**Executed by the QG.** The §5.3 archive with **one extra header field** — a crafted `uname` of
+`0 Aug 1` written into the ustar header's 32-byte uname slot. Nothing about the member changed: same
+typeflag `0`, same trailing-slash name, same 39 bytes of credential. What changed is the *rendering*:
+
+```
+drw-r--r--  0 0 Aug 1 g          39 Jul 27  2021 ./config/payload/
+              ^^^^^^^ injected — "digits followed by a date", the exact shape the size regex
+                      anchored on, appearing BEFORE the real size of 39
+```
+
+`parseMemberSize` returned `0`, `isRealDirectory` became true, the member was exempted, and the scan
+reported `2/2 file(s) scanned`, `Findings: none`, **exit 0** — while `tar -xOzf` printed the key.
+
+**§5.3 was right in *form* and wrong in *source*.** Inverting the classifier so exemption requires
+positive evidence was the correct move and it stands. What it did not change is **where the evidence
+comes from**: both the type and the size were read from `tar -tvzf`, a *human-readable rendering*
+whose column layout is a function of attacker-supplied header fields. An allowlist whose evidence is
+forgeable is an allowlist in shape and a denylist in effect. §5.3's own note even says "rendered is
+load-bearing" about the type — and then uses a second value from the same rendering as the
+cross-check.
+
+**The fix is terminal for the class, not another enumeration step.** The two facts are read from the
+archive's own bytes, at **fixed offsets** in each 512-byte ustar header:
+
+| Fact | Offset | Why it cannot be forged *around* |
+|---|---|---|
+| `typeflag` | **156** | no header field an attacker writes moves another field's offset |
+| `size` (octal) | **124** | same — there is no "one more forged column" variant of this |
+
+`tar` is still consulted, **demoted from source of truth to second opinion**: its enumeration is
+compared member-by-member against the header walk, and a member only one parse can see is refused by
+name — `hidden-member` (in the headers, not in `tar`'s listing) or `phantom-member` (the reverse).
+
+**What that immediately found, and it is not hypothetical.** macOS `tar -czf` writes an AppleDouble
+`._name` companion member for every file carrying an extended attribute, and **`tar -tzf` does not
+list it**. Measured:
+
+```
+$ xattr -w com.example.cfg "AWS_ACCESS_KEY_ID=AKIA…" LICENSE && tar -czf a.tgz .
+$ tar -tzf a.tgz
+./
+./LICENSE                      ← the listing admits two members
+$ # …while the credential is recoverable verbatim from the published bytes,
+$ # carried by a 163-byte ./._LICENSE member the listing never mentions.
+```
+
+Every cycle before this one enumerated from that listing, so **all four reported complete coverage of
+archives containing members they had never seen** — the same undisclosed-blindness class as
+F10/F11/F14/F17. Those members are now enumerated and refused, with the operator told the actual
+remedy (`COPYFILE_DISABLE=1 tar -czf …`, which is what a well-formed macOS build uses anyway).
+
+**Cost, named because "it's free" would be false.** This is a minimal tar reader — the thing parsing
+CLI output was chosen to avoid. To avoid refusing *legitimate* packages it must handle the extensions
+real archives use: the ustar `prefix` field, PAX `x`/`g` records (whose `path`/`size` overrides are
+honoured, because ignoring an override `tar` obeys would recreate the very divergence this closes),
+and GNU `L`/`K` long names. Anything it cannot walk cleanly — a header failing its own checksum, an
+unreadable size field, data past the end-of-archive marker, an archive `tar` cannot unpack — refuses
+the **whole** artifact. That last case used to throw an uncaught exception with a stack trace instead
+of producing a report; it is now a named refusal.
+
+**What remains of the differential residual:** detection compares exactly **two** parsers, this walk
+and the local `tar`. A third implementation that disagrees with *both* is still not covered.
+
+**Fixtures** (`test/publish-cli.test.mjs`): the forged-`uname` archive, which first asserts the
+credential really is recoverable *and* that the poisoned rendering still fools §5.3's exact regex —
+so the test cannot pass because the fixture failed to inject the field; both directions of the
+differential through the real `classifyMembers`; a broken-header archive; the AppleDouble trigger
+(real `xattr`, therefore macOS-only — CI's coverage of the refusal is the portable unit test); and
+the positive controls, re-run in full: **23/23**, zero regressions and zero over-fire.
 
 ## 6. Relationship to the base grep in CI
 

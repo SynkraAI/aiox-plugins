@@ -33,6 +33,13 @@ import { join } from "node:path";
 import { buildTarball, FIXTURE_SKILL } from "./tarball.mjs";
 import { MAX_SCANNED_FILE_BYTES } from "../../lib/secret-scanner.mjs";
 
+// fix-cycle-4 (F17). macOS `tar` writes an AppleDouble `._name` companion member for every file that
+// carries extended attributes, and `tar -tzf` does NOT list them — so their bytes ship inside the
+// artifact while being invisible to the archive's own listing. A fixture is meant to be a WELL-FORMED
+// package, and the scanner now (correctly) refuses one that carries members it does not declare.
+// This env var is the standard macOS fix and a no-op on Linux, where GNU tar never writes them.
+const NO_APPLEDOUBLE = { ...process.env, COPYFILE_DISABLE: "1" };
+
 const B = "-----BEGIN ";
 const E = "-----END ";
 const PK = "RSA PRIVATE KEY-----";
@@ -197,8 +204,11 @@ export function buildArtifactWithShadowedDuplicate() {
     writeFileSync(join(second, "config", "app.env"), "APP_ENV=production\n"); // the innocent shadow
 
     const tarPath = join(outDir, "artifact.tar");
-    execFileSync("tar", ["-cf", tarPath, "."], { cwd: first });
-    execFileSync("tar", ["-rf", tarPath, "./config/app.env"], { cwd: second });
+    // COPYFILE_DISABLE=1 — see test/helpers/tarball.mjs. The isolated defect here is the DUPLICATE
+    // path; a fixture that also carried AppleDouble members would be refused for two reasons at once
+    // and its test would pass for the wrong one.
+    execFileSync("tar", ["-cf", tarPath, "."], { cwd: first, env: NO_APPLEDOUBLE });
+    execFileSync("tar", ["-rf", tarPath, "./config/app.env"], { cwd: second, env: NO_APPLEDOUBLE });
 
     const gz = join(outDir, "artifact.tar.gz");
     writeFileSync(gz, gzipSync(readFileSync(tarPath)));
@@ -221,7 +231,7 @@ export function buildArtifactWithSymlinkMember() {
     writeFileSync(join(src, "SKILL.md"), FIXTURE_SKILL);
     symlinkSync("/etc/passwd", join(src, "config", "outside.env"));
     const gz = join(outDir, "artifact.tar.gz");
-    execFileSync("tar", ["-czf", gz, "."], { cwd: src });
+    execFileSync("tar", ["-czf", gz, "."], { cwd: src, env: NO_APPLEDOUBLE });
     return gz;
   } finally {
     rmSync(src, { recursive: true, force: true });
@@ -242,7 +252,7 @@ export function buildArtifactWithSymlinkMember() {
 // `tar -xOzf artifact.tar.gz ./config/payload/` prints the credential from the published bytes with
 // the same tar on the same machine.
 
-function ustarHeader(name, size, typeflag) {
+function ustarHeader(name, size, typeflag, { uname = "", gname = "" } = {}) {
   const b = Buffer.alloc(512, 0);
   const put = (s, off, len) => b.write(String(s).slice(0, len), off, len, "ascii");
   const oct = (n, len) => n.toString(8).padStart(len - 1, "0") + "\0";
@@ -256,16 +266,20 @@ function ustarHeader(name, size, typeflag) {
   put(typeflag, 156, 1);
   b.write("ustar\0", 257, 6, "ascii");
   b.write("00", 263, 2, "ascii");
+  // uname/gname are 32-byte FREE-TEXT slots the archive's author fills in — see the F17 fixture below
+  // for why that matters to anything that reads `tar`'s rendered listing.
+  if (uname) put(uname, 265, 32);
+  if (gname) put(gname, 297, 32);
   let sum = 0;
   for (const byte of b) sum += byte;
   b.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, 8, "ascii");
   return b;
 }
 
-function ustarMember(name, data, typeflag) {
+function ustarMember(name, data, typeflag, opts) {
   const buf = Buffer.from(data);
   const pad = Buffer.alloc((512 - (buf.length % 512)) % 512, 0);
-  return Buffer.concat([ustarHeader(name, buf.length, typeflag), buf, pad]);
+  return Buffer.concat([ustarHeader(name, buf.length, typeflag, opts), buf, pad]);
 }
 
 export function buildArtifactWithDirectoryShapedFileMember() {
@@ -280,6 +294,80 @@ export function buildArtifactWithDirectoryShapedFileMember() {
   const gz = join(outDir, "artifact.tar.gz");
   writeFileSync(gz, gzipSync(tar));
   return gz;
+}
+
+// ── fix-cycle-4 (F17) — the SAME member, plus ONE forged header field ────────────────────────────
+//
+// This is the F14 archive with a single addition: a crafted `uname` of `0 Aug 1` written into the
+// ustar header's 32-byte uname slot. Nothing about the member itself changes — same typeflag '0',
+// same trailing-slash name, same 39 bytes of credential. What changes is how `tar -tvzf` RENDERS the
+// line, because uname is a free-text column printed between the link count and the size:
+//
+//   drw-r--r--  0 0 Aug 1 g          39 Jul 27  2021 ./config/payload/
+//                 ^^^^^^^ injected — a "digits followed by a date", i.e. the exact shape the
+//                         size-column regex anchors on, appearing BEFORE the real size of 39
+//
+// The cycle-3 allowlist read the size from that rendering, so `parseMemberSize` returned 0, the
+// member was positively identified as a real directory, and the credential published at exit 0.
+//
+// That is the whole point of the fixture: cycle 3 inverted the classifier (correct in SHAPE —
+// exemption now requires positive evidence) but left the EVIDENCE itself attacker-shapeable. This
+// member is the proof that a forgeable allowlist is an allowlist in shape and a denylist in effect,
+// and it is the permanent regression test for the class.
+export function buildArtifactWithForgedUnameDirectoryMember() {
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  const outDir = mkdtempSync(join(tmpdir(), "aiox-plugins-forged-uname-"));
+  const tar = Buffer.concat([
+    ustarMember("./LICENSE", "MIT License\n\nCopyright (c) AIOX\n", "0"),
+    ustarMember("./SKILL.md", FIXTURE_SKILL, "0"),
+    ustarMember("./config/payload/", planted.render(), "0", { uname: "0 Aug 1", gname: "g" }),
+    Buffer.alloc(1024, 0),
+  ]);
+  const gz = join(outDir, "artifact.tar.gz");
+  writeFileSync(gz, gzipSync(tar));
+  return gz;
+}
+
+// ── fix-cycle-4 (F17) — a member the archive's own listing does not admit exists ─────────────────
+//
+// MEASURED, not theorised. Running `xattr -w com.example.cfg "AWS_ACCESS_KEY_ID=AKIA…" LICENSE` and
+// then `tar -czf` on macOS produces an archive whose `tar -tzf` prints exactly `./` and `./LICENSE`
+// — while the credential is recoverable verbatim from the published bytes, carried by a 163-byte
+// `./._LICENSE` AppleDouble member that the listing never mentions. Every cycle before this one
+// enumerated from that listing, so all four reported complete coverage of an archive containing a
+// member they had never seen. Same undisclosed-blindness class as F10/F11/F14/F17.
+//
+// THE FIXTURE USES THE REAL TRIGGER, and that is a deliberate trade-off with a cost worth naming.
+// A hand-forged AppleDouble member was tried first and REJECTED by measurement: macOS `tar` hides it
+// from `-tzf` exactly as the real one is hidden, but then FAILS to extract the archive ("Failed to
+// restore metadata"), because the forged blob is not a valid AppleDouble structure. A fixture that
+// cannot be unpacked is not a package, and a test built on it would be asserting against a shape no
+// publisher can produce. Writing a real AppleDouble encoder to fix that is a bigger detour than the
+// property is worth.
+//
+// So the trigger is genuine — `xattr -w` then `tar -czf` — and therefore macOS-only. The function
+// returns null where the platform cannot produce the condition (CI runs on ubuntu, where GNU tar has
+// no AppleDouble concept at all, so there is nothing to reproduce rather than something skipped).
+// CI's coverage of the REFUSAL itself does not depend on this: `classifyMembers` is pinned for both
+// directions of the differential by a portable unit test that runs everywhere.
+export function buildArtifactWithHiddenAppleDoubleMember() {
+  if (process.platform !== "darwin") return null;
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  const src = mkdtempSync(join(tmpdir(), "aiox-plugins-appledouble-src-"));
+  const outDir = mkdtempSync(join(tmpdir(), "aiox-plugins-appledouble-out-"));
+  try {
+    writeFileSync(join(src, "LICENSE"), "MIT License\n\nCopyright (c) AIOX\n");
+    writeFileSync(join(src, "SKILL.md"), FIXTURE_SKILL);
+    execFileSync("xattr", ["-w", "com.example.deploy", planted.render(), join(src, "LICENSE")]);
+    const gz = join(outDir, "artifact.tar.gz");
+    // NO COPYFILE_DISABLE here — the whole point is what macOS `tar` does by DEFAULT.
+    execFileSync("tar", ["-czf", gz, "."], { cwd: src });
+    return gz;
+  } catch {
+    return null; // xattr unavailable or refused — the condition cannot be produced here
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
 }
 
 // The positive control (AC2's second half): the SAME package shape with no credential in it. If this
