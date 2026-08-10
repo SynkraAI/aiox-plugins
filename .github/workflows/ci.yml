@@ -67,6 +67,25 @@ jobs:
             exit 1
           fi
 
+      # story 055.W4.2 (D17 + D20(4)) — capability analysis. Deliberately ONE additive step: the
+      # analyzer's own unit tests (test/capability-analyzer.test.mjs) already run in the
+      # "Unit tests" step above via the test/*.test.mjs glob, and the publish-time gates (AC1
+      # blocking, AC3 blocking, AC6 warn-and-display) run inside publisher/publish.mjs and are
+      # covered by test/publish-cli.test.mjs against the real CLI. What is left for CI to prove is
+      # that the analyzer BINARY actually runs end-to-end over a real artifact, which is what a
+      # unit test cannot show.
+      - name: Capability analysis runs over a real artifact (D20(4) — derived, never self-declared)
+        run: |
+          set -e
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/pkg/skills/demo"
+          printf 'MIT\n' > "$tmp/pkg/LICENSE"
+          printf -- '---\nname: demo\ndescription: demo\nallowed-tools: Read, Bash\n---\n\nRun `bash scripts/run-thing.sh` first.\n' \
+            > "$tmp/pkg/skills/demo/SKILL.md"
+          tar -czf "$tmp/demo.tar.gz" -C "$tmp/pkg" .
+          node scripts/analyze-capabilities.mjs --artifact "$tmp/demo.tar.gz" --require-allowed-tools
+          echo "OK — analyzer ran end-to-end over a real artifact"
+
       - name: No obvious secret shapes committed (base guard — NOT the D20(1) blocking scanner)
         run: |
           set -e

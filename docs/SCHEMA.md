@@ -29,6 +29,7 @@ the production index was still empty, which is the only moment it costs nothing 
 | `publisher.subject` | yes | The entitlement subject that published this entry (D22). Never a GitHub handle — publishing is itself an entitlement (D16). |
 | `published_at` | yes | ISO-8601 timestamp. |
 | `license.spdx_or_path` | yes | SPDX id or in-package path to the license found at the package root, checked at publish (D24(c)). |
+| `capabilities` | no | **DERIVED** capability analysis (D17 + D20(4), story `055.W4.2`). Written EXCLUSIVELY by `publisher/publish.mjs` from `lib/capability-analyzer.mjs`, computed from the artifact's own bytes. Carries `self_declared: false` as data, the per-skill **two signals** (`owns_scripts` / `instructs_execution`), the derived `union`, and a **non-empty `limits`** array. The publisher has **no manifest field** that feeds this — a manifest carrying `capabilities`/`permissions`/`grants`/`sandbox`/`trust_level` is refused outright. See `docs/CAPABILITIES.md`. |
 | `overlay.shadows` | no | Present only when the plugin declares shadowing one or more base skills (D23). `{ "<base-skill>": "<mandatory reason>" }`. This is **REUSE**, not a new mechanism — it mirrors the identical `overlay.shadows` block already defined and enforced in the product repo's `.aiox-core/sync/OVERLAY-MANIFEST.md` (story `055.W2.2`). The catalog only *renders* it (AC9). |
 
 ## What is deliberately absent from this version of the schema
@@ -38,6 +39,10 @@ the production index was still empty, which is the only moment it costs nothing 
   now, before the mechanism exists, would make the schema imply behavior the repo doesn't have.
 - A signature field over the entry or the index. Signing the index (D20(3)) is story `055.W4.3`,
   with its own key material in a vault kept separate from the entitlement signing key.
+- Any field in which a PUBLISHER could state its own capabilities. Its absence is the point, not an
+  omission (D17/AC3, story `055.W4.2`): a capability asserted by the party being assessed is worth
+  zero, so the only capability data in an entry is the DERIVED `capabilities` block above. This is
+  enforced as a refusal at publish time, never as a silently-ignored field.
 
 ## Versioning this schema
 

@@ -103,6 +103,56 @@
         }
       }
     },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analyzer_version", "derived_by", "self_declared", "union", "limits"],
+      "description": "DERIVED capability analysis (ADR D17 + D20(4), story 055.W4.2). Written EXCLUSIVELY by publisher/publish.mjs from lib/capability-analyzer.mjs, computed from the artifact's own bytes. THE PUBLISHER HAS NO MANIFEST FIELD THAT FEEDS THIS — a manifest carrying `capabilities`/`permissions`/`grants`/`sandbox`/`trust_level` is refused outright at publish time (lib/capability-analyzer.mjs::checkNoSelfDeclaredCapabilities), because a capability asserted by the party being assessed is worth zero. This block delivers VISIBILITY, NOT CONTAINMENT: nothing here sandboxes the plugin.",
+      "properties": {
+        "analyzer_version": { "type": "string" },
+        "derived_by": { "type": "string", "description": "The analyzer that produced this block — provenance of the derivation itself." },
+        "self_declared": {
+          "type": "boolean",
+          "const": false,
+          "description": "ALWAYS literally false, and re-checked in code (lib/entry-schema.mjs::validateEntryShape). Encoded as data rather than prose so a reader of the raw index can tell the block was computed, not accepted."
+        },
+        "enforcement": {
+          "type": "string",
+          "enum": ["warn-and-display", "blocking"],
+          "description": "D17: v1 is `warn-and-display`. The blocking path exists in code, off by configuration, with the documented trigger 'when opening to externals'."
+        },
+        "union": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Union of derived capabilities across every skill in the package (may be empty)."
+        },
+        "skills": {
+          "type": "array",
+          "description": "Per-skill breakdown carrying the TWO INDEPENDENT SIGNALS. They are never collapsed into one number: hosting a script and being instructed to execute one are orthogonal, and both matter to the threat model.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["skill", "capabilities", "owns_scripts", "instructs_execution"],
+            "properties": {
+              "skill": { "type": "string" },
+              "capabilities": { "type": "array", "items": { "type": "string" } },
+              "owns_scripts": { "type": "boolean", "description": "SIGNAL 1 — the skill ships its own scripts/ directory (it HOSTS code)." },
+              "instructs_execution": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["own", "other-skill", "repo", "ambient"] },
+                "description": "SIGNAL 2 — the body instructs EXECUTING a script, and whose: its own, another skill's, the repo's, or `ambient` (a bare name resolved from PATH/cwd at runtime, so which file runs is decided on the user's machine). Empty array = not detected."
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "REQUIRED and non-empty (AC5). What the analysis CANNOT see — above all that an MCP server is a runtime-resolved {command, args} pointer (product repo mcp.rs:68) whose `npx` target is never inspected. Travels WITH the capabilities so the two can never be displayed apart; a capability list shown without its blind spots lies by omission."
+        }
+      }
+    },
     "overlay": {
       "type": "object",
       "additionalProperties": false,
