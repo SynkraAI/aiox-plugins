@@ -33,7 +33,7 @@ import {
   buildArtifactWithHiddenAppleDoubleMember,
 } from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
-import { scanArtifact, unscannableMembers, renderScanReport, classifyMembers } from "../lib/secret-scanner.mjs";
+import { scanArtifact, unscannableMembers, renderScanReport, classifyMembers, tarMemberTable } from "../lib/secret-scanner.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
@@ -940,6 +940,19 @@ describe("055.W4.1 fix-cycle-2 — structural members are enumerated and fail-cl
   });
 });
 
+// Does the LOCAL tar unpack this archive at all? Measured per-run, never assumed from the platform
+// name (fix-cycle-4): bsdtar unpacks the forged F14/F17 archives, GNU tar 1.34 refuses them. Both
+// end in a correct fail-closed refusal, but at different stages and with different messages, and
+// hardcoding either one is what turned the CI red while macOS stayed green.
+function tarCanUnpack(artifact) {
+  const dir = mkdtempSync(join(tmpdir(), "aiox-plugins-canunpack-"));
+  try {
+    return spawnSync("tar", ["-xzf", artifact, "-C", dir], { stdio: "ignore" }).status === 0;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ── fix-cycle-3 (F14) — the classifier is an ALLOWLIST: exemption requires positive evidence ─────
 //
 // AC2 requires a negative test PER CLASS, and "a member with a regular-file typeflag whose name ends
@@ -968,36 +981,69 @@ describe("055.W4.1 fix-cycle-3 — a member that only LOOKS like a directory is 
       const artifact = buildArtifactWithDirectoryShapedFileMember();
 
       // The fixture only proves something if the archive is VALID and the credential is genuinely
-      // recoverable from it. The second engine's own attempt at this produced a damaged archive that
-      // yielded only NUL bytes — an unproven assertion dressed as a finding. Assert both properties
-      // here, from the archive itself, before asserting anything about the gate.
+      // in the published bytes. The second engine's own attempt at this produced a damaged archive
+      // that yielded only NUL bytes — an unproven assertion dressed as a finding.
+      //
+      // fix-cycle-4 / CI: this precondition is now checked HERMETICALLY, against the archive's own
+      // decompressed bytes, instead of via `tar -xOzf <member>`. Measured on GNU tar 1.34: that
+      // command prints NOTHING for a trailing-slash member name and exits 0, so the old assertion
+      // failed on Linux — the CI platform — while passing on macOS. It was asserting "this tar will
+      // hand me the member", which is not the claim. The claim is "the bytes ship", and gunzip
+      // proves that on every platform.
+      assert.match(gunzipSync(readFileSync(artifact)).toString("latin1"), /AKIA[A-Z2-7]{16}/,
+        "the credential must really ship inside the published bytes");
       const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
       assert.equal(members.length, 3, "the archive must have 3 members");
       assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
-      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/payload/"], { encoding: "utf8" });
-      assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the credential must really ship inside the published bytes");
 
       const { res, unchanged, target } = attempt(dir, artifact);
       assert.notEqual(res.status, 0, "this exited 0 for three cycles — it is the F14 bypass");
       assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
-      assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
-      assert.match(res.stderr, /carries 39 bytes of data/, "and cite the evidence: a real directory carries none");
+      // WHY THE REASON IS DERIVED AND NOT HARDCODED. The two tars disagree about this archive, and
+      // pretending otherwise is what broke on CI. bsdtar unpacks it, so the member reaches the
+      // classifier and is refused as `directory-with-data`. GNU tar REFUSES TO UNPACK IT AT ALL, so
+      // the archive is refused one step earlier, as `unextractable-archive`. Both are correct
+      // fail-closed refusals of the same archive; the invariant asserted unconditionally above is
+      // that it is REFUSED and the index is untouched. The CLASSIFIER itself — the thing fix-cycle-4
+      // actually changed — is proven separately and hermetically, in the test below, so that CI
+      // enforces it rather than exercising a refusal that happens for a different reason.
+      if (tarCanUnpack(artifact)) {
+        assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
+        assert.match(res.stderr, /carries 39 bytes of data/, "and cite the evidence: a real directory carries none");
+      } else {
+        assert.match(res.stderr, /\[unextractable-archive\] \(whole archive\)/);
+      }
       assert.ok(unchanged, "a REFUSED publish must not mutate the index");
       assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
     });
   });
 
-  test("F14 — the member is COUNTED, not dropped: 3 members report as 3", () => {
-    // The silent half of the finding. Before the inversion this archive reported "2/2 file(s)
-    // scanned" — a 3-member archive claiming complete coverage, which is the undisclosed blindness
-    // this story treats as disqualifying.
-    const report = scanArtifact(buildArtifactWithDirectoryShapedFileMember());
-    assert.equal(report.files_total, 3);
-    assert.equal(report.files_scanned, 2);
-    assert.match(renderScanReport(report), /2\/3 file\(s\) scanned/);
-    const un = unscannableMembers(report);
-    assert.equal(un.length, 1);
-    assert.equal(un[0].kind, "directory-with-data");
+  test("F14/F17 — the CLASSIFICATION is proven without depending on WHICH tar is installed", () => {
+    // THIS is the test that makes CI enforce fix-cycle-4, and it exists because of a defect the CI
+    // caught in the tests themselves: on GNU tar the end-to-end fixtures are refused as
+    // `unextractable-archive` BEFORE the classifier ever runs, so a green CI would have proven only
+    // that GNU tar cannot unpack the archive — a test passing for the wrong reason, which is the
+    // exact class this story keeps catching. The classifier is asserted directly instead.
+    for (const [label, build] of [
+      ["F14 (typeflag '0' + trailing-slash name)", buildArtifactWithDirectoryShapedFileMember],
+      ["F17 (the same, plus a forged `uname`)", buildArtifactWithForgedUnameDirectoryMember],
+    ]) {
+      const table = tarMemberTable(build());
+      assert.ok(table.aligned, `${label}: the header walk must enumerate cleanly`);
+      assert.equal(table.members.length, 3, `${label}: the member is COUNTED, not dropped`);
+
+      // The heart of it: the header says REGULAR FILE carrying 39 bytes, on every platform, because
+      // these come from fixed offsets (156 and 124) and not from anyone's rendering.
+      const payload = table.members.find((m) => m.raw_path === "./config/payload/");
+      assert.ok(payload, `${label}: the forged member must be enumerated`);
+      assert.equal(payload.type, "-", `${label}: typeflag at offset 156 says regular file`);
+      assert.equal(payload.size, 39, `${label}: size at offset 124 says 39 bytes`);
+
+      const { readable, structural } = classifyMembers(table);
+      assert.deepEqual(structural.map((s) => s.kind), ["directory-with-data"], `${label}: classified as the anomaly`);
+      assert.match(structural[0].why, /carries 39 bytes of data/, `${label}: the evidence is cited`);
+      assert.equal(readable.length, 2, `${label}: the two ordinary members are still readable`);
+    }
   });
 
   test("F14 — REAL directories are still exempt (the carve-out that must not tighten)", () => {
@@ -1063,32 +1109,48 @@ describe("055.W4.1 fix-cycle-4 — a forged header FIELD cannot move a header OF
       // Same discipline as the F14 fixture: prove the archive is VALID and the credential genuinely
       // recoverable BEFORE asserting anything about the gate. A probe that produced a damaged archive
       // would prove nothing, and this lineage has already been bitten by exactly that.
+      assert.match(gunzipSync(readFileSync(artifact)).toString("latin1"), /AKIA[A-Z2-7]{16}/,
+        "the credential must really ship inside the published bytes");
       const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
       assert.equal(members.length, 3, "the archive must have 3 members");
       assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
-      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/payload/"], { encoding: "utf8" });
-      assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the credential must really ship inside the published bytes");
 
       const { res, unchanged, target } = attempt(dir, artifact);
       assert.notEqual(res.status, 0, "this exited 0 after fix-cycle-3 — it is the F17 bypass");
       assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
-      assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
-      assert.match(res.stderr, /carries 39 bytes of data/, "read from the header, not from the rendered size column");
+      if (tarCanUnpack(artifact)) {
+        assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
+        assert.match(res.stderr, /carries 39 bytes of data/, "read from the header, not from the rendered size column");
+      } else {
+        assert.match(res.stderr, /\[unextractable-archive\] \(whole archive\)/);
+      }
       assert.ok(unchanged, "a REFUSED publish must not mutate the index");
       assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
     });
   });
 
-  test("F17 — the forged `uname` really does poison the RENDERED listing (the fix is load-bearing)", () => {
-    // Without this the test above could pass for the wrong reason — e.g. if the fixture simply
-    // failed to inject the field. Assert the poisoned rendering exists AND that the scan is no
-    // longer fooled by it.
+  test("F17 — where the forged `uname` DOES poison the rendering, the scan is no longer fooled", () => {
+    // Without this, the tests above could pass for the wrong reason — e.g. if the fixture simply
+    // failed to inject the field. It asserts the poisoned rendering EXISTS and that the scan reads
+    // past it.
+    //
+    // fix-cycle-4 / CI: the poisoning is a property of BSDTAR'S RENDERER, and that is the honest
+    // scope. bsdtar prints uname and gname as separate free-text columns, so an injected `0 Aug 1`
+    // lands exactly where the size column is expected. GNU tar prints `user/group` as one combined
+    // field, so the same bytes do NOT reproduce the bypass — measured on GNU tar 1.34, where the
+    // cycle-3 regex reads the true `39`. The condition is therefore detected, never assumed from a
+    // platform name, and skipped LOUDLY rather than failed where it cannot exist. The refusal that
+    // matters is proven unconditionally by the hermetic classifier test above.
     const artifact = buildArtifactWithForgedUnameDirectoryMember();
-    const verbose = execFileSync("tar", ["-tvzf", artifact], { encoding: "utf8" });
-    const line = verbose.split("\n").find((l) => l.includes("./config/payload/"));
-    // The cycle-3 size regex, verbatim. It must still match the injected ` 0 Aug 1 ` and read 0.
+    const line = execFileSync("tar", ["-tvzf", artifact], { encoding: "utf8" })
+      .split("\n").find((l) => l.includes("./config/payload/"));
+    // The cycle-3 size regex, verbatim.
     const cycle3Regex = /\s(\d+)\s+(?:[A-Z][a-z]{2}\s+\d{1,2}|\d{4}-\d{2}-\d{2})\s/;
-    assert.equal(cycle3Regex.exec(line)?.[1], "0", "the rendering must still say 0 — that is the bypass");
+    const rendered = cycle3Regex.exec(line)?.[1];
+    if (rendered !== "0") {
+      console.log(`  ↷ SKIPPED — this tar's long listing does not reproduce the F17 poisoning (size column read as ${JSON.stringify(rendered)}, not "0"). The bypass is specific to bsdtar's separate uname/gname columns; the refusal itself is covered by the hermetic classifier test.`);
+      return;
+    }
 
     const report = scanArtifact(artifact);
     assert.equal(report.files_total, 3);
