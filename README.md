@@ -29,6 +29,24 @@ catalog side of those decisions; the Cockpit-side consumer lives in the product 
 | `docs/SCHEMA.md` | Field-by-field explanation of the index entry schema | — |
 | `docs/INVARIANTS.md` | The four no-going-back invariants (D24 a/b/c + D21's `AC8`), how each is verified, and the explicitly-named design boundaries | — |
 
+## Capability analysis + mandatory `allowed-tools` (`055.W4.2`)
+
+Every publishable skill MUST declare `allowed-tools` (kebab-case; comma/space string or YAML list).
+Publishing without it fails, unconditionally. Capabilities shown to the user are **DERIVED** by
+AIOX-side static analysis from the artifact's bytes — the publisher has no field in which to
+declare them, and a manifest that tries is refused.
+
+This delivers **visibility, not containment**: nothing here sandboxes a plugin. v1 **warns and
+displays**; the blocking path exists in code, off by configuration, with the documented trigger
+"when opening to externals".
+
+```bash
+node scripts/analyze-capabilities.mjs --artifact <plugin.tar.gz> --require-allowed-tools
+node scripts/analyze-capabilities.mjs --dir <skills-dir> --json
+```
+
+Full design reasoning, the two signals, and what the analysis **cannot** see: `docs/CAPABILITIES.md`.
+
 ## Testing
 
 ```bash

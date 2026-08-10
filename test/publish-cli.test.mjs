@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense } from "./helpers/tarball.mjs";
+import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense, buildArtifactWithoutAllowedTools, buildArtifactWithExecutingSkill, fixtureSkill } from "./helpers/tarball.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
@@ -329,7 +329,7 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
       const ledger = writeEmptyLedger(dir);
 
       // v1 under the original name — legitimate, lands
-      const artifactV1 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1.0.0\n" });
+      const artifactV1 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v1.0.0") });
       assert.equal(
         tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: artifactV1 }),
         null,
@@ -337,7 +337,7 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
       );
 
       // v1.1.0 under a NEW name, REBUILT — different bytes, so digest lineage is blind to it
-      const artifactV2 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1.1.0 — rebuilt, different content\n" });
+      const artifactV2 = buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v1.1.0 — rebuilt, different content") });
       const digestV1 = createHash("sha256").update(readFileSync(artifactV1)).digest("hex");
       const digestV2 = createHash("sha256").update(readFileSync(artifactV2)).digest("hex");
       assert.notEqual(digestV1, digestV2, "the fixture is only meaningful if the bytes genuinely differ");
@@ -367,11 +367,11 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
       const target = writeEmptyIndex(dir);
       const ledger = writeEmptyLedger(dir);
       assert.equal(
-        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# a\n" }) }),
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("a") }) }),
         null,
       );
       assert.equal(
-        tryPublish({ dir, target, ledger, plugin_id: "sinkra-os", lineage_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# b\n" }) }),
+        tryPublish({ dir, target, ledger, plugin_id: "sinkra-os", lineage_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("b") }) }),
         null,
         "a distinct plugin with a distinct lineage must not be caught by the rename check",
       );
@@ -384,8 +384,8 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
       const target = writeEmptyIndex(dir);
       const ledger = writeEmptyLedger(dir);
       const args = { dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE };
-      assert.equal(tryPublish({ ...args, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1\n" }) }), null);
-      assert.equal(tryPublish({ ...args, version: "1.1.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v2\n" }) }), null);
+      assert.equal(tryPublish({ ...args, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v1") }) }), null);
+      assert.equal(tryPublish({ ...args, version: "1.1.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v2") }) }), null);
       const ledgerData = JSON.parse(readFileSync(ledger, "utf8"));
       assert.equal(ledgerData.plugins["aiox-enterprise"].history.length, 2);
       assert.equal(ledgerData.plugins["aiox-enterprise"].lineage_id, LIN_ENTERPRISE, "the identity is carried, not rewritten");
@@ -397,7 +397,7 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
       const target = writeEmptyIndex(dir);
       const ledger = writeEmptyLedger(dir);
       assert.equal(
-        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v1\n" }) }),
+        tryPublish({ dir, target, ledger, plugin_id: "aiox-enterprise", lineage_id: LIN_ENTERPRISE, version: "1.0.0", artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v1") }) }),
         null,
       );
       const stderr = tryPublish({
@@ -405,7 +405,7 @@ describe("check (a) — id immutability (D24(a), AC1, AC5 negative fixtures)", (
         plugin_id: "aiox-enterprise",
         lineage_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", // step 1 of the evasion: free up the old lineage
         version: "1.1.0",
-        artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": "# v2\n" }),
+        artifact: buildTarball({ LICENSE: "MIT\n", "SKILL.md": fixtureSkill("v2") }),
       });
       assert.ok(stderr !== null, "expected the relabelling to be REFUSED");
       assert.match(stderr, /is on record with lineage_id/);
@@ -529,6 +529,118 @@ describe("check (b) — burned name survives despublish (D24(b), AC2, VC-1, AC5 
           "--no-push",
         ], { stdio: "pipe" });
       }, /Command failed/);
+    });
+  });
+});
+
+// ── story 055.W4.2 — allowed-tools (AC1) + DERIVED capabilities (AC3/AC5/AC6) ──────────────────
+//
+// Proven through the REAL CLI as a subprocess, never a mocked one — same posture as the 055.W3.3
+// invariant fixtures. A gate that has only ever been exercised as a pure function has not been
+// shown to be wired into the thing that actually publishes.
+describe("055.W4.2 — `allowed-tools` mandatory + capabilities DERIVED, never declared", () => {
+  test("AC1 — publishing a skill with NO `allowed-tools` is REFUSED (everything else about it is valid)", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = writeManifest(dir);
+      const artifact = buildArtifactWithoutAllowedTools();
+      assert.throws(
+        () =>
+          publish({
+            manifest, target, ledger,
+            subject: "sub-1",
+            "r2-key": `plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+            artifact,
+            "mirror-url": `https://${GOOD_HOST}/plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+            "no-push": true,
+          }),
+        (e) => {
+          const out = String(e.stderr ?? "") + String(e.stdout ?? "");
+          assert.match(out, /allowed-tools` is REQUIRED|declares no `allowed-tools`/);
+          return true;
+        },
+      );
+      // the refusal must be REAL: nothing appended
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("AC3 — a manifest that self-declares `capabilities` is REFUSED, not ignored", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = writeManifest(dir, { capabilities: ["filesystem:read"] });
+      const artifact = buildValidArtifact();
+      assert.throws(
+        () =>
+          publish({
+            manifest, target, ledger,
+            subject: "sub-1",
+            "r2-key": `plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+            artifact,
+            "mirror-url": `https://${GOOD_HOST}/plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+            "no-push": true,
+          }),
+        (e) => {
+          const out = String(e.stderr ?? "") + String(e.stdout ?? "");
+          assert.match(out, /self-declares capabilities|NEVER self-declared/);
+          return true;
+        },
+      );
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("AC6 — a published entry CARRIES the derived capabilities, its two signals, and its limits", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = writeManifest(dir);
+      const artifact = buildArtifactWithExecutingSkill();
+      publish({
+        manifest, target, ledger,
+        subject: "sub-1",
+        "r2-key": `plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+        artifact,
+        "mirror-url": `https://${GOOD_HOST}/plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+        "no-push": true,
+      });
+      const entry = JSON.parse(readFileSync(target, "utf8")).entries[0];
+      assert.ok(entry.capabilities, "the entry must carry a derived capability block");
+      assert.equal(entry.capabilities.self_declared, false);
+      assert.equal(entry.capabilities.enforcement, "warn-and-display");
+
+      const runner = entry.capabilities.skills.find((s) => s.skill === "runner");
+      assert.equal(runner.owns_scripts, true, "SIGNAL 1 — it ships its own scripts/");
+      assert.deepEqual(runner.instructs_execution, ["own"], "SIGNAL 2 — and instructs running it");
+      assert.ok(entry.capabilities.union.includes("script:execute"));
+
+      // AC5 — the blind spots travel WITH the capabilities, all the way onto the entry.
+      assert.ok(entry.capabilities.limits.length >= 1);
+      assert.match(entry.capabilities.limits.join("\n"), /MCP/);
+      assert.match(entry.capabilities.limits.join("\n"), /npx/i);
+    });
+  });
+
+  test("AC6 — capability findings WARN but do not block: the publish with capabilities SUCCEEDS", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = writeManifest(dir);
+      const artifact = buildArtifactWithExecutingSkill();
+      publish({
+        manifest, target, ledger,
+        subject: "sub-1",
+        "r2-key": `plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+        artifact,
+        "mirror-url": `https://${GOOD_HOST}/plugins/aiox-enterprise/1.0.0/x.tar.gz`,
+        "no-push": true,
+      });
+      const entry = JSON.parse(readFileSync(target, "utf8")).entries[0];
+      assert.ok(entry.capabilities.union.length > 0, "it DID find capabilities...");
+      // ...and published anyway. That is D17's decision, made visible as a test.
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 1);
     });
   });
 });

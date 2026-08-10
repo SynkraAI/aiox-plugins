@@ -25,18 +25,41 @@ export function buildTarball(files) {
   }
 }
 
+// story 055.W4.2: `allowed-tools` became MANDATORY on every publishable skill (D17/AC1), so every
+// fixture skill below now carries it. This is deliberately applied to the NEGATIVE fixtures too:
+// a license-negative fixture that ALSO fails the allowed-tools gate would still make its test pass
+// (the assertion greps for the license message), but for the wrong reason — and a test that can
+// pass for the wrong reason stops being evidence the moment the right reason disappears. Each
+// fixture is therefore invalid in EXACTLY ONE way.
+export const FIXTURE_SKILL = `---
+name: fixture-skill
+description: A minimal valid fixture skill.
+allowed-tools: Read
+---
+
+# fixture skill
+`;
+
+// A valid fixture skill carrying a distinguishing marker in its body. The D24(a)/F9 lineage tests
+// depend on artifacts having DIFFERENT BYTES from one another (that is the property under test),
+// so they cannot all share one constant — the marker is what keeps the digests distinct while the
+// frontmatter keeps them publishable.
+export function fixtureSkill(marker) {
+  return `---\nname: fixture-skill\ndescription: A minimal valid fixture skill.\nallowed-tools: Read\n---\n\n# ${marker}\n`;
+}
+
 // A minimal, valid plugin artifact: LICENSE at the true top level.
 export function buildValidArtifact() {
   return buildTarball({
     "LICENSE": "MIT License\n\nCopyright (c) AIOX\n",
-    "SKILL.md": "# fixture skill\n",
+    "SKILL.md": FIXTURE_SKILL,
   });
 }
 
 // A plugin artifact with NO license anywhere — the negative fixture for check (c).
 export function buildArtifactWithoutLicense() {
   return buildTarball({
-    "SKILL.md": "# fixture skill, no license anywhere in the package\n",
+    "SKILL.md": FIXTURE_SKILL,
     "src/index.js": "// no license\n",
   });
 }
@@ -46,6 +69,33 @@ export function buildArtifactWithoutLicense() {
 export function buildArtifactWithBuriedLicense() {
   return buildTarball({
     "src/nested/deep/LICENSE": "MIT License (buried, not at package root)\n",
-    "SKILL.md": "# fixture skill\n",
+    "SKILL.md": FIXTURE_SKILL,
+  });
+}
+
+// story 055.W4.2 — the AC1 negative fixture at CLI level: a licensed, otherwise-perfect artifact
+// whose skill declares NO `allowed-tools`. Everything else about it is valid, so a publish that
+// still succeeds proves the gate is decorative.
+export function buildArtifactWithoutAllowedTools() {
+  return buildTarball({
+    "LICENSE": "MIT License\n\nCopyright (c) AIOX\n",
+    "SKILL.md": "---\nname: fixture-skill\ndescription: declares no allowed-tools.\n---\n\n# fixture skill\n",
+  });
+}
+
+// story 055.W4.2 — a skill that ships its own scripts/ AND instructs executing it. Used to prove
+// the two derived signals reach the published entry and the rendered catalog.
+export function buildArtifactWithExecutingSkill() {
+  return buildTarball({
+    "LICENSE": "MIT License\n\nCopyright (c) AIOX\n",
+    "skills/runner/SKILL.md": `---
+name: runner
+description: Runs its own helper.
+allowed-tools: Read, Bash
+---
+
+Run \`node <skill-dir>/scripts/helper.mjs --go\` before anything else.
+`,
+    "skills/runner/scripts/helper.mjs": "// helper\n",
   });
 }

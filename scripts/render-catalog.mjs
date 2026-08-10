@@ -76,6 +76,39 @@ export function renderCatalog(index, label) {
     lines.push(`- Published by: \`${escapeMd(e.publisher?.subject)}\` at ${escapeMd(e.published_at)}`);
     lines.push(`- License: ${escapeMd(e.license?.spdx_or_path)}`);
 
+    // story 055.W4.2 (D20(4)) — DERIVED capabilities, shown on the entry the user reads BEFORE
+    // installing. Rendered from `e.capabilities`, which publisher/publish.mjs computes with the
+    // static analyzer from the artifact's own bytes; the publisher has no field that feeds this.
+    //
+    // The `limits` block is rendered UNCONDITIONALLY alongside the capability list, and that
+    // coupling is the point (AC5): an MCP server is a runtime-resolved `{command, args}` pointer
+    // and the `npx` target is never inspected. A capability display that omits what it cannot see
+    // lies by omission — so the two cannot be rendered apart.
+    const caps = e.capabilities;
+    if (caps) {
+      lines.push("");
+      lines.push(`### What this plugin can do — \`${escapeMd(e.plugin_id)}\``);
+      lines.push("");
+      lines.push(
+        `_DERIVED by AIOX-side static analysis (\`${escapeMd(caps.derived_by)}\`), **never self-declared by the publisher** (D17). Mode: ${escapeMd(caps.enforcement)}._`,
+      );
+      lines.push("");
+      lines.push(`- Capabilities: ${(caps.union ?? []).length ? caps.union.map((c) => `\`${escapeMd(c)}\``).join(", ") : "_(none detected)_"}`);
+      for (const s of caps.skills ?? []) {
+        const flags = [
+          s.owns_scripts ? "ships its own `scripts/`" : null,
+          (s.instructs_execution ?? []).length ? `instructs script execution (${s.instructs_execution.map(escapeMd).join(", ")})` : null,
+        ].filter(Boolean);
+        lines.push(
+          `  - \`${escapeMd(s.skill)}\` — ${(s.capabilities ?? []).map((c) => `\`${escapeMd(c)}\``).join(", ") || "_none detected_"}${flags.length ? ` · **${flags.join(" · ")}**` : ""}`,
+        );
+      }
+      lines.push("");
+      lines.push("> **What this analysis CANNOT see** — read this before calibrating trust:");
+      lines.push(">");
+      for (const l of caps.limits ?? []) lines.push(`> - ${escapeMd(l)}`);
+    }
+
     const shadows = e.overlay?.shadows;
     if (shadows && Object.keys(shadows).length > 0) {
       lines.push("");

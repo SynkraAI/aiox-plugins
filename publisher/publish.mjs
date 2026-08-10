@@ -67,6 +67,15 @@ import {
 } from "../lib/entry-schema.mjs";
 import { checkLicenseInPackageRoot } from "../lib/license-check.mjs";
 import { loadLedger, saveLedger, recordPublish } from "../lib/ledger.mjs";
+import {
+  analyzeSkills,
+  collectSkillsFromTarball,
+  checkAllowedToolsDeclared,
+  checkNoSelfDeclaredCapabilities,
+  toEntryCapabilities,
+  renderCapabilityReport,
+  capabilityFindingsAreBlocking,
+} from "../lib/capability-analyzer.mjs";
 
 function usageAndExit(msg) {
   if (msg) console.error(`error: ${msg}\n`);
@@ -125,6 +134,29 @@ function main() {
     ? args["emit-tiers"].split(",").map((t) => t.trim()).filter(Boolean)
     : manifest.tiers;
 
+  // ── story 055.W4.2 (D17 + D20(4)) — allowed-tools + DERIVED capabilities ────────────────────
+  //
+  // Order matters. AC3 first: if the manifest tries to assert its own capabilities, refuse before
+  // doing any analysis at all — there is no "we'll just ignore that field" path, because a field
+  // that is ignored today is a field that gets read by accident tomorrow.
+  const selfDeclaredErrs = checkNoSelfDeclaredCapabilities(manifest);
+  if (selfDeclaredErrs.length) {
+    console.error("REFUSED — manifest self-declares capabilities (D17/AC3):");
+    for (const e of selfDeclaredErrs) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+
+  // Read the skills out of the artifact's ACTUAL BYTES — the same posture as check (c): a
+  // manifest field is an assertion, the tarball is the thing the user will run.
+  const { skills, files } = collectSkillsFromTarball(args.artifact);
+
+  // AC1 — BLOCKING and unconditional. No flag, no env var, no fixture path disables it.
+  const allowedToolsErrs = checkAllowedToolsDeclared(skills);
+
+  // AC3/AC6 — capabilities DERIVED here, on the AIOX side, from the body. Nothing the publisher
+  // wrote about itself contributes to this value.
+  const capabilityReport = analyzeSkills(skills, files);
+
   const entry = {
     schema_version: ENTRY_SCHEMA_VERSION,
     plugin_id: manifest.plugin_id,
@@ -138,6 +170,7 @@ function main() {
     publisher: { subject: args.subject },
     published_at: new Date().toISOString(),
     license: { spdx_or_path: manifest.license },
+    capabilities: toEntryCapabilities(capabilityReport),
     ...(manifest.overlay ? { overlay: manifest.overlay } : {}),
   };
 
@@ -151,10 +184,21 @@ function main() {
   const idImmutabilityErrs = checkIdImmutabilityAgainstLedger(ledger, entry);
   const burnedErrs = checkNameNotBurned(ledger, entry);
 
-  const allErrs = [...shapeErrs, ...bindingErrs, ...hostErrs, ...tierErrs, ...licenseErrs, ...idImmutabilityErrs, ...burnedErrs];
+  const allErrs = [...shapeErrs, ...bindingErrs, ...hostErrs, ...tierErrs, ...licenseErrs, ...idImmutabilityErrs, ...burnedErrs, ...allowedToolsErrs];
   if (allErrs.length) {
     console.error("REFUSED — entry fails validation:");
     for (const e of allErrs) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+
+  // AC6 — v1 WARNS AND DISPLAYS. The derived analysis is printed for the operator and stored on
+  // the entry for the user; it does NOT refuse the publish. This is D17's explicit decision, not
+  // laxity: real containment needs an execution host, and the ADR rejects a third-party WASM host
+  // with evidence. The blocking path below exists and is exercised by tests; its documented
+  // trigger is "when opening to externals".
+  console.error(renderCapabilityReport(capabilityReport));
+  if (capabilityFindingsAreBlocking() && capabilityReport.union_capabilities.length) {
+    console.error("REFUSED — capability findings are blocking (the catalog is open to external publishers)");
     process.exit(1);
   }
 
