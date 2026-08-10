@@ -138,6 +138,27 @@ jobs:
           fi
           echo "OK — unscannable member is REFUSED end-to-end (fail-closed)"
 
+          # 4. fix-cycle-2 (F10): a SHADOWED duplicate member — the same path twice in one tar
+          #    stream, credential first, clean second. Extraction keeps only the clean one, so a
+          #    filesystem-based inventory saw nothing; the credential nevertheless shipped and was
+          #    recoverable with `tar -xOzf`. The scan now enumerates the archive's MEMBER TABLE.
+          cp -R "$tmp/clean" "$tmp/shadow"
+          mkdir -p "$tmp/shadow/config"
+          printf 'AWS_ACCESS_KEY_ID=%s%s\n' 'AKIA' 'QRS7TUVWX234YZ56' > "$tmp/shadow/config/app.env"
+          ( cd "$tmp/shadow" && tar -cf "$tmp/shadow.tar" . )
+          mkdir -p "$tmp/shadow2/config"
+          printf 'APP_ENV=production\n' > "$tmp/shadow2/config/app.env"
+          ( cd "$tmp/shadow2" && tar -rf "$tmp/shadow.tar" ./config/app.env )
+          gzip -c "$tmp/shadow.tar" > "$tmp/shadow.tar.gz"
+          # the fixture is only meaningful if the credential really is in the published bytes
+          tar -xOzf "$tmp/shadow.tar.gz" ./config/app.env | grep -q 'AKIA' \
+            || { echo "fixture broken: the shadowed member does not carry the credential"; exit 1; }
+          if node scripts/scan-secrets.mjs --artifact "$tmp/shadow.tar.gz"; then
+            echo "REFUSED: a shadowed duplicate member passed — the credential ships silently"
+            exit 1
+          fi
+          echo "OK — shadowed duplicate member is REFUSED end-to-end (F10)"
+
       # story 055.W4.1 (AC5) — the plugin channel must never read binary-channel state.
       - name: Plugin channel stays decoupled from the binary channel (D19 / AC5)
         run: |

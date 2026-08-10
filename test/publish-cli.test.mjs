@@ -25,8 +25,11 @@ import {
   buildCleanArtifact,
   buildArtifactWithNulPrefixedSecret,
   buildArtifactWithOversizedSecret,
+  buildArtifactWithShadowedDuplicate,
+  buildArtifactWithSymlinkMember,
 } from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
+import { scanArtifact, unscannableMembers, renderScanReport } from "../lib/secret-scanner.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
@@ -839,5 +842,96 @@ describe("055.W4.1 fix-cycle-1 — an UNSCANNABLE member is fail-closed (F2)", (
       assert.match(res.stderr, /assets\/icon\.bin/);
       assert.doesNotMatch(res.stderr, /secret scanning found/, "nothing was FOUND — the refusal is about not being able to look");
     });
+  });
+});
+
+// ── fix-cycle-2 (F10/F11) — STRUCTURAL evasions: the archive is enumerated, not the extraction ───
+//
+// Round 1 closed the evasions where the scanner said out loud it had not looked. These are the ones
+// where it said nothing at all: a shadowed duplicate member (the credential ships and is recoverable
+// from the published bytes) and a non-regular member (dropped before it could even be counted). One
+// root fix closes both — the member table is the inventory — and both land in the fail-closed path
+// built and tested in cycle 1 rather than a second mechanism.
+describe("055.W4.1 fix-cycle-2 — structural members are enumerated and fail-closed (F10/F11)", () => {
+  function attempt(dir, artifact) {
+    const target = writeEmptyIndex(dir);
+    const ledger = writeEmptyLedger(dir);
+    const before = readFileSync(target, "utf8");
+    const manifest = writeManifest(dir);
+    const res = spawnSync("node", [
+      publishScript,
+      "--manifest", manifest, "--target", target, "--ledger", ledger,
+      "--subject", "acct_test", "--artifact", artifact,
+      "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--no-push",
+    ], { encoding: "utf8" });
+    return { res, unchanged: readFileSync(target, "utf8") === before, target };
+  }
+
+  test("F10 — a SHADOWED duplicate member no longer publishes, and the credential really was in the bytes", () => {
+    withTempDir((dir) => {
+      const artifact = buildArtifactWithShadowedDuplicate();
+
+      // The fixture is only meaningful if the credential is genuinely recoverable from the published
+      // artifact. Assert that FIRST, from the archive itself — otherwise a later refusal could be
+      // passing for the wrong reason (e.g. a fixture that never carried the secret at all).
+      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/app.env"], { encoding: "utf8" });
+      assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the shadowed member must actually carry the credential");
+      assert.match(dumped, /APP_ENV=production/, "...and the innocent shadow must also be present");
+
+      const { res, unchanged, target } = attempt(dir, artifact);
+      assert.notEqual(res.status, 0, "this exited 0 before fix-cycle-2 — the credential shipped silently");
+      assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
+      assert.match(res.stderr, /\[duplicate\] config\/app\.env/, "the refusal must name the shadowed path");
+      assert.match(res.stderr, /appears 2 times in the archive/, "and say WHY, so it is actionable");
+      assert.ok(unchanged);
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("F11 — a non-regular (symlink) member is enumerated and refused, not dropped before counting", () => {
+    withTempDir((dir) => {
+      const { res, unchanged } = attempt(dir, buildArtifactWithSymlinkMember());
+      assert.notEqual(res.status, 0);
+      assert.match(res.stderr, /\[non-regular\] config\/outside\.env/);
+      assert.match(res.stderr, /member type 'l' is not a regular file/);
+      assert.ok(unchanged);
+    });
+  });
+
+  test("F11 — the member count now means what it says: 3 members are reported as 3, not 2", () => {
+    // The honesty half of F11, separate from the refusal: before fix-cycle-2 a 3-member archive
+    // reported "2/2 file(s) scanned" — which reads as COMPLETE coverage of an archive it had not
+    // fully seen, in the very report AC3 makes load-bearing.
+    const report = scanArtifact(buildArtifactWithSymlinkMember());
+    assert.equal(report.files_total, 3, "LICENSE + SKILL.md + the symlink");
+    assert.equal(report.files_scanned, 2);
+    assert.equal(unscannableMembers(report).length, 1);
+    assert.match(renderScanReport(report), /2\/3 file\(s\) scanned/);
+  });
+
+  test("the positive control still publishes — enumerating from the archive is not a blanket refusal", () => {
+    withTempDir((dir) => {
+      const { res } = attempt(dir, buildCleanArtifact());
+      assert.equal(res.status, 0, "an ordinary all-regular-member package must still publish");
+      assert.match(res.stdout, /^OK —/m);
+    });
+  });
+
+  test("directories are NOT treated as unscannable (every normal artifact contains them)", () => {
+    // The failure mode this guards against is the opposite of F10: a fix that refuses every archive
+    // would also "close" the finding, and would be useless.
+    const report = scanArtifact(buildCleanArtifact());
+    assert.equal(unscannableMembers(report).length, 0);
+    assert.ok(report.files_total >= 4);
+  });
+
+  test("what the member table cannot see is DECLARED in the limits printed on every run", () => {
+    // The F2 lesson, applied to its own fix: an undeclared blind spot is the disqualifying kind.
+    const joined = scanArtifact(buildCleanArtifact()).limits.join("\n");
+    assert.match(joined, /WHAT THE MEMBER TABLE ITSELF CANNOT SEE/);
+    assert.match(joined, /parser differential/);
+    assert.match(joined, /nested archive/);
   });
 });

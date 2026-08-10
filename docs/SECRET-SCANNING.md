@@ -152,7 +152,10 @@ a **shape detector, not a semantic one**.
 - **The corpus does not update itself** — it is a dated snapshot of a named upstream ref.
 - **Binary and oversized members cannot be scanned — and therefore BLOCK the publish** (§5.1).
 - **Symlinks are not followed** — a symlink's target is outside the artifact; scanning it would
-  report on the publishing machine's filesystem, not on what ships.
+  report on the publishing machine's filesystem, not on what ships. Since fix-cycle-2 they are also
+  not *dropped*: they are enumerated from the member table and refused (§5.2).
+- **The member table has its own blind spots** — a tar parser differential, and nested archives
+  (§5.2).
 - **A clean scan is not a security verdict.** It means "no known credential *shape* was found in
   these bytes". It is not a statement that the package is safe, that it does no harm, or that AIOX
   endorses it — the catalog signs the **index** to attest provenance, never the artifact to attest
@@ -203,6 +206,67 @@ in hand — not a bypass built speculatively. Tracked in the product repo:
 in `test/publish-cli.test.mjs`, plus a control proving the refusal is about *not being able to look*
 rather than about finding something (a clean binary member with no credential in it also blocks), plus
 the positive control that a clean package still publishes.
+
+### 5.2 The inventory is the ARCHIVE, not the extraction (fix-cycle-2, F10/F11)
+
+Fail-closed only means something if the list of members it runs over is complete. It was not.
+
+**Executed by the QG, and reproduced here before the fix.** A single tar stream carrying the **same
+path twice** — first member holding a shape-valid AWS key, second member clean — extracts to one
+clean file. The scanner inventoried the *extracted filesystem*, saw one file, found nothing, exited
+**0**. The credential shipped and stayed fully recoverable from the published bytes:
+
+```
+$ tar -tzf shadow.tar.gz | sort | uniq -d
+./config/app.env                      ← the same member, twice
+$ tar -xOzf shadow.tar.gz ./config/app.env
+AWS_ACCESS_KEY_ID=AKIA…               ← still there, in the bytes a client downloads
+```
+
+**Why this outranked the gap it replaced**, even at the same severity: §5.1 was survivable because
+the scanner *said out loud* what it had not read. A shadowed member appeared in **nothing** — not
+`files_total`, not `skipped_binary`, not `skipped_too_large`, not `unscannable`. Undisclosed
+blindness is the disqualifying kind. The same root cause had a quieter symptom too (**F11**):
+symlinks and other non-regular members were dropped *before* enumeration, so a 3-member archive
+reported `2/2 file(s) scanned` — which reads as complete coverage of an archive that was not fully
+seen, in the very report §5 makes load-bearing.
+
+**The fix, once, for both.** The **member table** (`tar -tzf` for names, `tar -tvzf` for types) is
+the source of truth for what the archive contains; the extracted tree only supplies *bytes* for
+members the table says are ordinary files. Anything the table lists that cannot be mapped to exactly
+one readable regular file is **unscannable**, and therefore refused by the path §5.1 already built:
+
+| Member kind | Treatment |
+|---|---|
+| regular file, unique path | scanned |
+| **directory** | structural — carries no bytes, present in every normal artifact, **not** refused (a fix that refused these would refuse everything) |
+| **duplicate path** | refused — extraction keeps only the last, so an earlier member's bytes ship without ever existing on disk to be read |
+| **non-regular** (symlink, hardlink, FIFO, socket, device) | refused — enumerated rather than dropped before counting |
+| **absolute or `..`-escaping path** | refused — cannot be mapped to a file inside the package root |
+| listed as a regular file but **absent after extraction** | refused — a member that was never read is not a pass |
+
+`files_total` now counts the archive's content members, so `N/M file(s) scanned` means what a reader
+assumes it means.
+
+**What the member table still cannot see** — declared here and in the limits printed on every run,
+because the lesson of §5.1 is that an undeclared blind spot is the disqualifying kind:
+
+1. **Parser differential.** The inventory is *this* `tar`'s parse. A crafted archive that another tar
+   implementation reads differently — extra, ignored or ambiguous headers, PAX vs ustar
+   disagreements — could present a consumer with members this scan never saw. Nothing here detects
+   that. It is an adversarial construction, and it matters most at the same moment §5.1's residual
+   does: when the catalog opens to external publishers.
+2. **Structure, not content.** The table cannot tell that an ordinary-looking member is itself a
+   nested archive whose contents are never opened.
+3. **Unenumerable archives are refused outright.** If the two listings disagree on member count (a
+   member name containing a newline is the realistic cause), the whole artifact is refused rather
+   than guessed at — fail-closed, but it means such an archive cannot be published at all.
+
+**Fixtures** (`test/publish-cli.test.mjs`, through the real CLI): the shadowed-duplicate artifact —
+which first asserts the credential really *is* recoverable from the archive, so a later refusal
+cannot pass for the wrong reason — the symlink artifact, a `files_total` honesty check (3 reported as
+3), the positive control that a clean package still publishes, and a control that directories are not
+refused.
 
 ## 6. Relationship to the base grep in CI
 

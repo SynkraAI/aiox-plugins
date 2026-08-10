@@ -25,6 +25,11 @@
 // planted credential, of exactly one class. `test/secret-scanner.test.mjs` asserts that mechanically
 // — a fixture that trips two rules would let its test pass for the wrong reason.
 
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { gzipSync } from "node:zlib";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildTarball, FIXTURE_SKILL } from "./tarball.mjs";
 import { MAX_SCANNED_FILE_BYTES } from "../../lib/secret-scanner.mjs";
 
@@ -161,6 +166,66 @@ export function buildArtifactWithOversizedSecret() {
     "SKILL.md": FIXTURE_SKILL,
     "config/creds.env": planted.render() + padding,
   });
+}
+
+// ── fix-cycle-2 (F10/F11) — the STRUCTURAL evasions ──────────────────────────────────────────────
+//
+// These two cannot be built with `buildTarball`, which writes a directory and archives it: one needs
+// the same path to appear TWICE in a single tar stream (the filesystem cannot hold that), and the
+// other needs a member that is not a regular file. They are built by driving `tar` directly, the
+// same posture as the rest of this helper — exercise the real tool, never a mock.
+//
+// gzip is done with node:zlib rather than by shelling out, so the fixture does not depend on a
+// `gzip` binary being on PATH in CI.
+
+// F10 — the shadowed duplicate. Member 1 at `config/app.env` carries a shape-valid AWS key; member 2
+// at the SAME path is clean. Extraction keeps only the clean one, so a filesystem-based inventory
+// sees nothing wrong — while `tar -xOzf artifact.tar.gz ./config/app.env` still prints the
+// credential from the published bytes. This is the QG's construction, reproduced verbatim.
+export function buildArtifactWithShadowedDuplicate() {
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  const first = mkdtempSync(join(tmpdir(), "aiox-plugins-shadow-a-"));
+  const second = mkdtempSync(join(tmpdir(), "aiox-plugins-shadow-b-"));
+  const outDir = mkdtempSync(join(tmpdir(), "aiox-plugins-shadow-out-"));
+  try {
+    mkdirSync(join(first, "config"), { recursive: true });
+    writeFileSync(join(first, "LICENSE"), "MIT License\n\nCopyright (c) AIOX\n");
+    writeFileSync(join(first, "SKILL.md"), FIXTURE_SKILL);
+    writeFileSync(join(first, "config", "app.env"), planted.render()); // the credential
+
+    mkdirSync(join(second, "config"), { recursive: true });
+    writeFileSync(join(second, "config", "app.env"), "APP_ENV=production\n"); // the innocent shadow
+
+    const tarPath = join(outDir, "artifact.tar");
+    execFileSync("tar", ["-cf", tarPath, "."], { cwd: first });
+    execFileSync("tar", ["-rf", tarPath, "./config/app.env"], { cwd: second });
+
+    const gz = join(outDir, "artifact.tar.gz");
+    writeFileSync(gz, gzipSync(readFileSync(tarPath)));
+    return gz;
+  } finally {
+    rmSync(first, { recursive: true, force: true });
+    rmSync(second, { recursive: true, force: true });
+  }
+}
+
+// F11 — a non-regular member. The symlink carries no bytes of its own, so this is an honesty defect
+// rather than a leak path: before fix-cycle-2 it was dropped BEFORE enumeration, so a 3-member
+// archive reported "2/2 file(s) scanned" — complete coverage of an archive it had not fully seen.
+export function buildArtifactWithSymlinkMember() {
+  const src = mkdtempSync(join(tmpdir(), "aiox-plugins-symlink-src-"));
+  const outDir = mkdtempSync(join(tmpdir(), "aiox-plugins-symlink-out-"));
+  try {
+    mkdirSync(join(src, "config"), { recursive: true });
+    writeFileSync(join(src, "LICENSE"), "MIT License\n\nCopyright (c) AIOX\n");
+    writeFileSync(join(src, "SKILL.md"), FIXTURE_SKILL);
+    symlinkSync("/etc/passwd", join(src, "config", "outside.env"));
+    const gz = join(outDir, "artifact.tar.gz");
+    execFileSync("tar", ["-czf", gz, "."], { cwd: src });
+    return gz;
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
 }
 
 // The positive control (AC2's second half): the SAME package shape with no credential in it. If this

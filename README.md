@@ -53,6 +53,11 @@ pointer resolved at runtime (`{command, args}`, typically `npx <package>`), and 
 encoded secret escapes it entirely. Those limits are printed on **every** run, including successful
 ones.
 
+A member the scan **cannot read** — binary, oversized, a duplicate/shadowed path, or a non-regular
+member — **blocks the publish** rather than being skipped: unscannable is treated as not publishable
+(§5.1), and the inventory comes from the archive's own **member table**, not from what survives
+extraction (§5.2).
+
 ## Version pin + the plugin channel (`055.W4.1`, D20(2) / D19)
 
 `<plugin_id>@<version>` resolves to a **digest**; the mirror path is content-addressed, so the same
