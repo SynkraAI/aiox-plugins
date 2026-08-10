@@ -31,6 +31,9 @@ import {
   buildArtifactWithDirectoryShapedFileMember,
   buildArtifactWithForgedUnameDirectoryMember,
   buildArtifactWithHiddenAppleDoubleMember,
+  artifactMemberNames,
+  artifactMemberText,
+  readArtifactMembers,
 } from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
 import { scanArtifact, unscannableMembers, renderScanReport, classifyMembers, tarMemberTable } from "../lib/secret-scanner.mjs";
@@ -880,7 +883,7 @@ describe("055.W4.1 fix-cycle-2 — structural members are enumerated and fail-cl
       // The fixture is only meaningful if the credential is genuinely recoverable from the published
       // artifact. Assert that FIRST, from the archive itself — otherwise a later refusal could be
       // passing for the wrong reason (e.g. a fixture that never carried the secret at all).
-      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/app.env"], { encoding: "utf8" });
+      const dumped = artifactMemberText(artifact, "./config/app.env");
       assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the shadowed member must actually carry the credential");
       assert.match(dumped, /APP_ENV=production/, "...and the innocent shadow must also be present");
 
@@ -992,7 +995,7 @@ describe("055.W4.1 fix-cycle-3 — a member that only LOOKS like a directory is 
       // proves that on every platform.
       assert.match(gunzipSync(readFileSync(artifact)).toString("latin1"), /AKIA[A-Z2-7]{16}/,
         "the credential must really ship inside the published bytes");
-      const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
+      const members = artifactMemberNames(artifact);
       assert.equal(members.length, 3, "the archive must have 3 members");
       assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
 
@@ -1111,7 +1114,7 @@ describe("055.W4.1 fix-cycle-4 — a forged header FIELD cannot move a header OF
       // would prove nothing, and this lineage has already been bitten by exactly that.
       assert.match(gunzipSync(readFileSync(artifact)).toString("latin1"), /AKIA[A-Z2-7]{16}/,
         "the credential must really ship inside the published bytes");
-      const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
+      const members = artifactMemberNames(artifact);
       assert.equal(members.length, 3, "the archive must have 3 members");
       assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
 
@@ -1174,6 +1177,12 @@ describe("055.W4.1 fix-cycle-4 — a forged header FIELD cannot move a header OF
 
     // The blindness is real before anything is asserted about the gate: tar's own listing does not
     // mention the member, and the credential is recoverable from the published bytes anyway.
+    // AQUI o `tar` externo é OBRIGATÓRIO e não pode virar leitura de header (coordenador da wave,
+    // 2026-08-10): a asserção é sobre a CEGUEIRA DA FERRAMENTA — que a listagem do tar NÃO admite o
+    // membro —, não sobre o conteúdo do arquivo. Um leitor de header cru ENXERGA o membro (é esse o
+    // ponto do achado), então trocá-lo aqui inverteria o que o teste prova. Este bloco só roda no
+    // macOS, onde o fixture existe; `buildArtifactWithHiddenAppleDoubleMember()` devolve null fora
+    // dele e o teste já retornou acima.
     const listing = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" });
     assert.ok(!listing.includes("._LICENSE"), "the archive's own listing must not admit the member exists");
     const rawBytes = gunzipSync(readFileSync(artifact)).toString("latin1");

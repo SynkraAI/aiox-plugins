@@ -27,7 +27,7 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTarball, FIXTURE_SKILL } from "./tarball.mjs";
@@ -280,6 +280,56 @@ function ustarMember(name, data, typeflag, opts) {
   const buf = Buffer.from(data);
   const pad = Buffer.alloc((512 - (buf.length % 512)) % 512, 0);
   return Buffer.concat([ustarHeader(name, buf.length, typeflag, opts), buf, pad]);
+}
+
+// ── Leitura HERMÉTICA do artefato, espelho do `ustarHeader` acima ────────────────────────────────
+//
+// Adicionado pelo coordenador da wave (2026-08-10) porque os fixtures do F14/F17 VERIFICAVAM o
+// artefato com `execFileSync("tar", …)` — extraindo POR NOME um membro cujo nome termina em `/`.
+// Isso passa com bsdtar/libarchive (macOS) e REPROVA com GNU tar (o runner Linux da CI): extrair um
+// arquivo REGULAR cujo nome tem forma de diretório é justamente o caso ambíguo que estes fixtures
+// constroem de propósito, e cada implementação resolve à sua maneira. Resultado: 241/241 local,
+// 238/241 na CI, e os 3 vermelhos eram exatamente as provas do F14 e do F17.
+//
+// É a mesma lição do F17 aplicada à PROVA em vez da implementação: não delegues a classificação a
+// uma ferramenta cujo comportamento varia — lê os bytes. Este leitor usa os mesmos offsets que o
+// escritor logo acima (name@0, size@124 octal, typeflag@156), então fixture e verificação
+// permanecem um par coerente, e a suíte roda idêntica em qualquer sistema, com ou sem `tar`.
+export function readArtifactMembers(artifactPath) {
+  const buf = gunzipSync(readFileSync(artifactPath));
+  const members = [];
+  for (let off = 0; off + 512 <= buf.length; ) {
+    const h = buf.subarray(off, off + 512);
+    if (h.every((byte) => byte === 0)) break; // dois blocos nulos terminam o arquivo
+    const str = (start, len) => {
+      const raw = h.subarray(start, start + len);
+      const nul = raw.indexOf(0);
+      return raw.subarray(0, nul === -1 ? raw.length : nul).toString("ascii").trim();
+    };
+    const name = str(0, 100);
+    const octal = str(124, 12);
+    const size = octal ? parseInt(octal, 8) : 0;
+    const typeflag = String.fromCharCode(h[156] || 0x30);
+    const data = buf.subarray(off + 512, off + 512 + size);
+    members.push({ name, typeflag, size, data });
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return members;
+}
+
+// Os dois atalhos que os testes usavam via `tar -tzf` e `tar -xOzf`.
+export function artifactMemberNames(artifactPath) {
+  return readArtifactMembers(artifactPath).map((m) => m.name);
+}
+export function artifactMemberText(artifactPath, memberName) {
+  // TODAS as ocorrências, concatenadas — não a primeira. Um tarball pode carregar o MESMO nome mais
+  // de uma vez (é exatamente o fixture do F10: um membro sombreando o outro), e `tar -xOzf` despeja
+  // as duas cópias em sequência. Devolver só a primeira faria o teste do F10 procurar a credencial
+  // na cópia inocente e não encontrá-la — falso negativo introduzido pela própria verificação.
+  return readArtifactMembers(artifactPath)
+    .filter((x) => x.name === memberName)
+    .map((x) => x.data.toString("utf8"))
+    .join("");
 }
 
 export function buildArtifactWithDirectoryShapedFileMember() {
