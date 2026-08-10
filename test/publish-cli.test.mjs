@@ -12,13 +12,15 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense, buildArtifactWithoutAllowedTools, buildArtifactWithExecutingSkill, fixtureSkill } from "./helpers/tarball.mjs";
+import { PLANTED_SECRETS, buildArtifactWithPlantedSecret, buildCleanArtifact } from "./helpers/secret-fixtures.mjs";
+import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
@@ -641,6 +643,120 @@ describe("055.W4.2 — `allowed-tools` mandatory + capabilities DERIVED, never d
       assert.ok(entry.capabilities.union.length > 0, "it DID find capabilities...");
       // ...and published anyway. That is D17's decision, made visible as a test.
       assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 1);
+    });
+  });
+});
+
+// ── story 055.W4.1 — BLOCKING secret scanning (D20(1)), AC1 + AC2 ──────────────────────────────
+//
+// AC2 is explicit that a per-class NEGATIVE fixture is the evidence, and that green-against-a-clean-
+// package is not: "a scanner that passes verde against a clean package proves nothing — it is
+// literally the failure mode this lineage already produced". So every covered class gets its own
+// planted credential, pushed through the REAL CLI as a subprocess, and the assertion is on the
+// REFUSAL plus on the target file being untouched. The positive control at the end is what keeps the
+// whole block from being satisfiable by a gate that refuses everything.
+describe("055.W4.1 — secret scanning is BLOCKING at publish (D20(1)/AC1), per-class fixtures (AC2)", () => {
+  test("the fixture set covers EVERY class the scanner claims — a claimed-but-unfixtured class fails here", () => {
+    assert.deepEqual([...new Set(PLANTED_SECRETS.map((p) => p.class))].sort(), [...SECRET_CLASSES]);
+  });
+
+  for (const planted of PLANTED_SECRETS) {
+    test(`AC2 — a package carrying a planted ${planted.class} is REFUSED (nonzero exit, index untouched)`, () => {
+      withTempDir((dir) => {
+        const target = writeEmptyIndex(dir);
+        const ledger = writeEmptyLedger(dir);
+        const before = readFileSync(target, "utf8");
+        const manifest = writeManifest(dir);
+        const artifact = buildArtifactWithPlantedSecret(planted);
+
+        let stderr = "";
+        try {
+          execFileSync("node", [
+            publishScript,
+            "--manifest", manifest, "--target", target, "--ledger", ledger,
+            "--subject", "acct_test", "--artifact", artifact,
+            "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+            "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+            "--no-push",
+          ], { stdio: "pipe" });
+          assert.fail(`expected publish to be REFUSED for a planted ${planted.class}`);
+        } catch (e) {
+          stderr = String(e.stderr ?? "");
+        }
+
+        assert.match(stderr, /REFUSED — secret scanning found/, "the refusal must name secret scanning as the reason");
+        assert.match(stderr, new RegExp(`\\[${planted.class}\\]`), "the refusal must name the CLASS that was found");
+        assert.match(stderr, new RegExp(planted.where.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the refusal must name the FILE, so it is actionable");
+        assert.match(stderr, /ROTATE it/, "a credential prepared for publication is exposed whether or not the publish went through");
+        assert.equal(readFileSync(target, "utf8"), before, "a REFUSED publish must not mutate the index");
+        assert.equal(JSON.parse(readFileSync(ledger, "utf8")).plugins.hasOwnProperty("aiox-enterprise"), false, "nor the ledger");
+      });
+    });
+  }
+
+  test("AC2 POSITIVE CONTROL — the same package shape WITHOUT a credential publishes fine (not a blanket refusal)", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const manifest = writeManifest(dir);
+      const out = publish({
+        manifest, target, ledger, subject: "acct_test", artifact: buildCleanArtifact(),
+        "mirror-url": `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+        "r2-key": `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+        "no-push": true,
+      });
+      assert.match(out, /^OK —/m);
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 1);
+    });
+  });
+
+  test("AC1 — a credential in the MANIFEST is blocking too (the manifest becomes a PUBLIC catalog entry)", () => {
+    withTempDir((dir) => {
+      const target = writeEmptyIndex(dir);
+      const ledger = writeEmptyLedger(dir);
+      const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+      const manifest = writeManifest(dir, { description: `see ${planted.render().trim()}` });
+      let stderr = "";
+      try {
+        execFileSync("node", [
+          publishScript,
+          "--manifest", manifest, "--target", target, "--ledger", ledger,
+          "--subject", "acct_test", "--artifact", buildValidArtifact(),
+          "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+          "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+          "--no-push",
+        ], { stdio: "pipe" });
+        assert.fail("expected publish to be REFUSED");
+      } catch (e) {
+        stderr = String(e.stderr ?? "");
+      }
+      assert.match(stderr, /\[aws-access-key\] manifest\.json/);
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  // AC3's deliverable is not a document nobody opens — it is that the limits are IN FRONT OF the
+  // operator on the success path, which is the only path a happy publisher ever sees. `spawnSync` is
+  // used because `execFileSync` returns stdout only, and the report (with its blind spots) is
+  // deliberately written to stderr so it cannot be swallowed by a caller piping stdout to a file.
+  test("AC3 — the limits are printed on a publish that SUCCEEDS, not only on a refusal", () => {
+    withTempDir((dir) => {
+      const res = spawnSync("node", [
+        publishScript,
+        "--manifest", writeManifest(dir), "--target", writeEmptyIndex(dir), "--ledger", writeEmptyLedger(dir),
+        "--subject", "acct_test", "--artifact", buildCleanArtifact(),
+        "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+        "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+        "--no-push",
+      ], { encoding: "utf8" });
+
+      assert.equal(res.status, 0, "the clean package must publish");
+      assert.match(res.stdout, /^OK —/m);
+      assert.match(res.stderr, /WHAT THIS SCAN CANNOT SEE/);
+      assert.match(res.stderr, /POINTER, NOT THE TARGET/, "limit (a) — the MCP pointer is not the target");
+      assert.match(res.stderr, /OBFUSCATED OR ENCODED SECRET ESCAPES/, "limit (b)");
+      assert.match(res.stderr, /Corpus: gitleaks/, "the corpus + its snapshot date are part of the honest claim");
+      assert.match(res.stderr, /A CLEAN SCAN IS NOT A SECURITY VERDICT/);
     });
   });
 });

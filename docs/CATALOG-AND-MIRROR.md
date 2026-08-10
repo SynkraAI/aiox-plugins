@@ -66,3 +66,8 @@ is not built here. If you are editing this repo and about to write the word "rev
 "remove" as something the system does **on its own** (not as an explicit, manual, reasoned
 operator action), stop — check whether `055.W1.3`'s `O5` reconciliation and `055.W5.1` have actually
 landed first.
+
+Story `055.W4.1` obeys this guardrail explicitly: the version pin's documented cost is that an
+already-installed artifact **cannot be repaired**, and the thing that gives that capability back is
+index freshness (`055.W5.1`). *Repair* is not *revocation*, and `docs/PIN-AND-CHANNEL.md` §2 says so
+in the same words rather than leaving a reader to infer it.
