@@ -24,7 +24,7 @@ Measured in the product repo's SOT (`.aiox-core/skills/`), 2026-08-10:
 | Skills declaring `allowed-tools` before this story | **0 of 35** |
 | Skills that ship their own `scripts/` (`OWNS_SCRIPTS`) | **6 of 35** |
 | Skills whose body instructs executing a script (`INSTRUCTS_EXECUTION`) | **9 of 35** |
-| Is an MCP server an inspectable artifact? | **No — a `{command, args}` pointer** (`mcp.rs:68`) |
+| Is an MCP server an inspectable artifact? | **No — a `{command, args}` pointer** (`crates/aiox-core/src/mcp.rs:68`) |
 
 D17's prohibition on third-party `scripts/` remains valid, but it is verifiable **over the folder,
 not over the behaviour**. That is why the analyzer emits two signals and never one number.
@@ -126,7 +126,7 @@ These travel **with** the capabilities, always — onto the entry, and into the 
 coupling is deliberate: **a capability list displayed without its blind spots lies by omission.**
 
 - **An MCP server is a runtime-resolved pointer, not an artifact.** The manifest supplies
-  `{command, args}` (product repo `mcp.rs:68`, typically `npx <package>`) against a registry AIOX
+  `{command, args}` (product repo `crates/aiox-core/src/mcp.rs:68`, typically `npx <package>`) against a registry AIOX
   does not control. This analysis covers the **pointer**; it has never opened the **target**. The
   `npx` target is never inspected, downloaded or executed.
 - A signature over the index covers the pointer, not the pointed-at package. **Provenance is not

@@ -26,6 +26,7 @@
 // — a fixture that trips two rules would let its test pass for the wrong reason.
 
 import { buildTarball, FIXTURE_SKILL } from "./tarball.mjs";
+import { MAX_SCANNED_FILE_BYTES } from "../../lib/secret-scanner.mjs";
 
 const B = "-----BEGIN ";
 const E = "-----END ";
@@ -124,6 +125,41 @@ export function buildArtifactWithPlantedSecret(planted) {
     LICENSE: "MIT License\n\nCopyright (c) AIOX\n",
     "SKILL.md": FIXTURE_SKILL,
     [planted.where]: planted.render(),
+  });
+}
+
+// ── fix-cycle-1 (F2) — the EVASION fixtures ──────────────────────────────────────────────────────
+//
+// These are the two artifacts the QG built by hand to defeat the gate. They are reproduced here as
+// permanent fixtures so the fail-closed decision is proven BY EXECUTION rather than by the paragraph
+// that argues for it: the argument can be edited, the fixtures cannot be satisfied by prose.
+//
+// Both carry a REAL, shape-valid credential — the same `aws-access-key` fixture used above — so a
+// scanner that could read the member would certainly find it. The only thing standing between the
+// credential and publication is whether "I could not read this" is treated as a pass.
+
+// Evasion A — one leading NUL byte makes the member read as binary.
+// The NUL is produced with String.fromCharCode, never written as a literal byte in this source: a
+// source file containing a real NUL is classified binary, and `grep -I` (which this repo's own CI
+// guards use) SKIPS binary files, which would silently drop this file out of the sweeps it must be
+// subject to.
+export function buildArtifactWithNulPrefixedSecret() {
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  return buildTarball({
+    LICENSE: "MIT License\n\nCopyright (c) AIOX\n",
+    "SKILL.md": FIXTURE_SKILL,
+    "config/creds.env": String.fromCharCode(0) + planted.render(),
+  });
+}
+
+// Evasion B — the same credential, followed by padding that pushes the member past the scan cap.
+export function buildArtifactWithOversizedSecret() {
+  const planted = PLANTED_SECRETS.find((p) => p.class === "aws-access-key");
+  const padding = "#".repeat(MAX_SCANNED_FILE_BYTES + 1);
+  return buildTarball({
+    LICENSE: "MIT License\n\nCopyright (c) AIOX\n",
+    "SKILL.md": FIXTURE_SKILL,
+    "config/creds.env": planted.render() + padding,
   });
 }
 

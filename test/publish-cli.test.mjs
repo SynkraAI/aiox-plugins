@@ -18,8 +18,14 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense, buildArtifactWithoutAllowedTools, buildArtifactWithExecutingSkill, fixtureSkill } from "./helpers/tarball.mjs";
-import { PLANTED_SECRETS, buildArtifactWithPlantedSecret, buildCleanArtifact } from "./helpers/secret-fixtures.mjs";
+import { buildTarball, buildValidArtifact, buildArtifactWithoutLicense, buildArtifactWithBuriedLicense, buildArtifactWithoutAllowedTools, buildArtifactWithExecutingSkill, fixtureSkill, FIXTURE_SKILL } from "./helpers/tarball.mjs";
+import {
+  PLANTED_SECRETS,
+  buildArtifactWithPlantedSecret,
+  buildCleanArtifact,
+  buildArtifactWithNulPrefixedSecret,
+  buildArtifactWithOversizedSecret,
+} from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -757,6 +763,81 @@ describe("055.W4.1 — secret scanning is BLOCKING at publish (D20(1)/AC1), per-
       assert.match(res.stderr, /OBFUSCATED OR ENCODED SECRET ESCAPES/, "limit (b)");
       assert.match(res.stderr, /Corpus: gitleaks/, "the corpus + its snapshot date are part of the honest claim");
       assert.match(res.stderr, /A CLEAN SCAN IS NOT A SECURITY VERDICT/);
+    });
+  });
+});
+
+// ── fix-cycle-1 (F2) — the two evasions the QG EXECUTED, now proven to be REFUSED ───────────────
+//
+// Before this cycle each of these published with exit 0 while carrying a live-shaped AWS key,
+// because an unscannable member was listed and then ignored. The disposition taken is fail-closed:
+// unscannable => not publishable. These fixtures are what makes that decision provable rather than
+// merely argued — see the decision site in lib/secret-scanner.mjs for the trade-off, the named cost,
+// and why there is deliberately no override flag.
+describe("055.W4.1 fix-cycle-1 — an UNSCANNABLE member is fail-closed (F2)", () => {
+  function attempt(dir, artifact) {
+    const target = writeEmptyIndex(dir);
+    const ledger = writeEmptyLedger(dir);
+    const before = readFileSync(target, "utf8");
+    const manifest = writeManifest(dir);
+    const res = spawnSync("node", [
+      publishScript,
+      "--manifest", manifest, "--target", target, "--ledger", ledger,
+      "--subject", "acct_test", "--artifact", artifact,
+      "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--no-push",
+    ], { encoding: "utf8" });
+    return { res, unchanged: readFileSync(target, "utf8") === before, target };
+  }
+
+  test("evasion A — a leading NUL byte (member reads as binary) no longer publishes a real credential", () => {
+    withTempDir((dir) => {
+      const { res, unchanged, target } = attempt(dir, buildArtifactWithNulPrefixedSecret());
+      assert.notEqual(res.status, 0, "this exited 0 before fix-cycle-1 — that was the defect");
+      assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
+      assert.match(res.stderr, /config\/creds\.env/, "the refusal must name the member");
+      assert.match(res.stderr, /NUL byte in the first 8000 bytes/, "and say WHY it could not be read");
+      assert.match(res.stderr, /There is no override flag by design/);
+      assert.ok(unchanged, "a REFUSED publish must not mutate the index");
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("evasion B — padding past the scan cap no longer publishes a real credential", () => {
+    withTempDir((dir) => {
+      const { res, unchanged } = attempt(dir, buildArtifactWithOversizedSecret());
+      assert.notEqual(res.status, 0, "this exited 0 before fix-cycle-1 — that was the defect");
+      assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
+      assert.match(res.stderr, /config\/creds\.env/);
+      assert.match(res.stderr, /larger than the \d+-byte scan cap/);
+      assert.ok(unchanged);
+    });
+  });
+
+  test("fail-closed is not a blanket refusal: the clean package still publishes (positive control)", () => {
+    withTempDir((dir) => {
+      const { res } = attempt(dir, buildCleanArtifact());
+      assert.equal(res.status, 0, "a package with nothing unscannable in it must still publish");
+      assert.match(res.stdout, /^OK —/m);
+    });
+  });
+
+  test("the refusal is on UNSCANNABLE specifically — a clean BINARY member blocks even with no credential in it", () => {
+    // The honest reading of the rule, stated as a test: the gate refuses because it could not look,
+    // not because it found something. An implementation that only refused when it happened to also
+    // detect a credential would be back to disclosure-instead-of-enforcement.
+    withTempDir((dir) => {
+      const artifact = buildTarball({
+        LICENSE: "MIT\n",
+        "SKILL.md": FIXTURE_SKILL,
+        "assets/icon.bin": String.fromCharCode(0, 1) + "no credential whatsoever, just binary bytes",
+      });
+      const { res } = attempt(dir, artifact);
+      assert.notEqual(res.status, 0);
+      assert.match(res.stderr, /could NOT be scanned/);
+      assert.match(res.stderr, /assets\/icon\.bin/);
+      assert.doesNotMatch(res.stderr, /secret scanning found/, "nothing was FOUND — the refusal is about not being able to look");
     });
   });
 });

@@ -120,6 +120,36 @@ describe("AC4 — the pin is deterministic: same pin ⇒ same digest ⇒ same by
     assert.throws(() => resolvePin(data, "dup@1.0.0"), /DIFFERENT digests/);
   });
 
+  // fix-cycle-1 (F5). The QG executed this: duplicates with the SAME digest were tie-broken by
+  // `exact[0]`, so the same pin over two index orderings returned different `mirror_url` and
+  // different `tiers`. `tiers` is the entitlement axis, so order deciding it is not cosmetic.
+  test("F5 — same-digest duplicates are REFUSED too, and the resolution is not order-dependent", () => {
+    const one = { plugin_id: "dup", version: "1.0.0", digest: { algorithm: "sha256", value: "a".repeat(64) }, artifact: { mirror_url: "https://x/one" }, tiers: ["base"] };
+    const two = { plugin_id: "dup", version: "1.0.0", digest: { algorithm: "sha256", value: "a".repeat(64) }, artifact: { mirror_url: "https://x/two" }, tiers: ["forjar"] };
+
+    for (const entries of [[one, two], [two, one]]) {
+      assert.throws(
+        () => resolvePin({ entries }, "dup@1.0.0"),
+        (e) => {
+          assert.match(e.message, /REFUSED: 2 entries share this plugin_id@version/);
+          assert.match(e.message, /entitlement axis/, "the message must say WHY same-digest duplicates still matter");
+          return true;
+        },
+        "both orderings must refuse — before fix-cycle-1 each returned a different answer",
+      );
+    }
+  });
+
+  // fix-cycle-1 (F6). A missing `digest.algorithm` used to resolve as sha256 by assumption.
+  test("F6 — an entry with no digest.algorithm is REFUSED, not assumed to be sha256", () => {
+    const data = {
+      entries: [{ plugin_id: "noalg", version: "1.0.0", digest: { value: "a".repeat(64) }, artifact: { mirror_url: "https://x/a" } }],
+    };
+    assert.throws(() => resolvePin(data, "noalg@1.0.0"), /no digest\.algorithm/);
+    // ...and the well-formed entry right next to it still resolves, so this is not a blanket refusal.
+    assert.equal(resolvePinFromFile(fixturesIndex, "sinkra-os@0.0.0-fixture").digest.algorithm, "sha256");
+  });
+
   test("an unresolvable pin says WHAT IS available instead of just failing", () => {
     const data = JSON.parse(readFileSync(fixturesIndex, "utf8"));
     assert.throws(() => resolvePin(data, "nope@1.0.0"), /Known plugin_ids: .*sinkra-os/);
@@ -193,6 +223,62 @@ describe("AC5 — the plugin channel is separate from the binary channel, proven
     const out = execFileSync("node", [channelGuard], { stdio: "pipe" }).toString();
     assert.match(out, /OK — no executable file in this repository reads binary-channel state/);
     assert.match(out, /\.aiox-core-build/, "the guard must name what it checked, not just say OK");
+  });
+
+  // fix-cycle-1 (F4). The QG defeated the guard with one character: the exemption was line-prefix
+  // textual, so a real read hidden behind a leading `/*` passed while the identical read on an
+  // ordinary line was caught. The guard now blanks comment CONTENT and searches the code that is
+  // left. Both halves are pinned here — the evasion must fail, and a genuine doc-comment mention
+  // must still be exempt, because a fix that flagged every comment would just be a different bug.
+  test("F4 — a coupling hidden behind a block-comment opener is CAUGHT (it used to pass)", () => {
+    const planted = join(repoRoot, "scripts", "__channel-comment-evasion-fixture.mjs");
+    try {
+      writeFileSync(
+        planted,
+        '/* probe */ import { readFileSync } from "node:fs"; const s = readFileSync(".aiox-core-build", "utf8");\nexport default s;\n',
+      );
+      let stderr = "";
+      try {
+        execFileSync("node", [channelGuard], { stdio: "pipe" });
+        assert.fail("expected the guard to REFUSE — this is the evasion that used to exit 0");
+      } catch (e) {
+        stderr = String(e.stderr ?? "");
+      }
+      assert.match(stderr, /__channel-comment-evasion-fixture\.mjs/);
+      assert.match(stderr, /\[\.aiox-core-build\]/);
+    } finally {
+      if (existsSync(planted)) unlinkSync(planted);
+    }
+  });
+
+  test("F4 — a genuine doc-comment MENTION is still exempt (the fix must not flag prose)", () => {
+    const planted = join(repoRoot, "scripts", "__channel-comment-mention-fixture.mjs");
+    try {
+      writeFileSync(
+        planted,
+        '// This module is deliberately independent of .aiox-core-build and of velopack.\n/* Nor does it read RELEASES. */\nexport default 1;\n',
+      );
+      const out = execFileSync("node", [channelGuard], { stdio: "pipe" }).toString();
+      assert.match(out, /OK — no executable file/);
+    } finally {
+      if (existsSync(planted)) unlinkSync(planted);
+    }
+  });
+
+  test("F4 — a `//` inside a STRING does not blank the rest of the line (the dangerous direction)", () => {
+    // A naive comment stripper treats the `//` in a URL as a comment opener and blanks everything
+    // after it — which would hide a real coupling written later on the same line. This fixture
+    // fails in that implementation and passes in this one.
+    const planted = join(repoRoot, "scripts", "__channel-url-then-coupling-fixture.mjs");
+    try {
+      writeFileSync(
+        planted,
+        'const u = "https://example.invalid/x"; const s = readFileSync(".aiox-core-build");\nexport default [u, s];\n',
+      );
+      assert.throws(() => execFileSync("node", [channelGuard], { stdio: "pipe" }), /Command failed/);
+    } finally {
+      if (existsSync(planted)) unlinkSync(planted);
+    }
   });
 
   test("the guard is not decorative: introducing a coupling makes it FAIL", () => {
