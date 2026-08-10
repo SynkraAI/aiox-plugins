@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,8 @@ import {
   buildArtifactWithShadowedDuplicate,
   buildArtifactWithSymlinkMember,
   buildArtifactWithDirectoryShapedFileMember,
+  buildArtifactWithForgedUnameDirectoryMember,
+  buildArtifactWithHiddenAppleDoubleMember,
 } from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
 import { scanArtifact, unscannableMembers, renderScanReport, classifyMembers } from "../lib/secret-scanner.mjs";
@@ -1022,7 +1025,151 @@ describe("055.W4.1 fix-cycle-3 — a member that only LOOKS like a directory is 
     const { readable, structural } = classifyMembers(table);
     assert.deepEqual(readable.map((m) => m.path), ["c.txt"]);
     assert.deepEqual(structural.map((s) => s.kind), ["directory-with-data", "directory-with-data"]);
-    assert.match(structural[0].why, /size could not be determined/);
+    // fix-cycle-4 (F17): the size now comes from the ustar header at offset 124, so the message
+    // names its source. The PROPERTY under test is unchanged — an unverifiable claim is not a pass.
+    assert.match(structural[0].why, /size could not be read from the ustar header/);
     assert.match(structural[1].why, /carries 12 bytes/);
+  });
+});
+
+// ── fix-cycle-4 (F17) — classification reads the ustar HEADER, not `tar`'s rendered listing ───────
+//
+// AC2 requires a negative test PER CLASS. The class here is not "a trailing-slash name" (that was
+// F14) — it is "the evidence the allowlist depends on is attacker-controlled". Cycle 3 inverted the
+// classifier correctly in FORM (exemption requires positive evidence) but read that evidence from
+// `tar -tvzf`, a human-readable rendering whose columns are a function of attacker-supplied header
+// fields. ONE forged `uname` re-exempted the member and the credential published at exit 0.
+describe("055.W4.1 fix-cycle-4 — a forged header FIELD cannot move a header OFFSET (F17)", () => {
+  function attempt(dir, artifact) {
+    const target = writeEmptyIndex(dir);
+    const ledger = writeEmptyLedger(dir);
+    const before = readFileSync(target, "utf8");
+    const manifest = writeManifest(dir);
+    const res = spawnSync("node", [
+      publishScript,
+      "--manifest", manifest, "--target", target, "--ledger", ledger,
+      "--subject", "acct_test", "--artifact", artifact,
+      "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--no-push",
+    ], { encoding: "utf8" });
+    return { res, unchanged: readFileSync(target, "utf8") === before, target };
+  }
+
+  test("F17 — the F14 member plus ONE forged `uname` is REFUSED", () => {
+    withTempDir((dir) => {
+      const artifact = buildArtifactWithForgedUnameDirectoryMember();
+
+      // Same discipline as the F14 fixture: prove the archive is VALID and the credential genuinely
+      // recoverable BEFORE asserting anything about the gate. A probe that produced a damaged archive
+      // would prove nothing, and this lineage has already been bitten by exactly that.
+      const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
+      assert.equal(members.length, 3, "the archive must have 3 members");
+      assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
+      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/payload/"], { encoding: "utf8" });
+      assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the credential must really ship inside the published bytes");
+
+      const { res, unchanged, target } = attempt(dir, artifact);
+      assert.notEqual(res.status, 0, "this exited 0 after fix-cycle-3 — it is the F17 bypass");
+      assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
+      assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
+      assert.match(res.stderr, /carries 39 bytes of data/, "read from the header, not from the rendered size column");
+      assert.ok(unchanged, "a REFUSED publish must not mutate the index");
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("F17 — the forged `uname` really does poison the RENDERED listing (the fix is load-bearing)", () => {
+    // Without this the test above could pass for the wrong reason — e.g. if the fixture simply
+    // failed to inject the field. Assert the poisoned rendering exists AND that the scan is no
+    // longer fooled by it.
+    const artifact = buildArtifactWithForgedUnameDirectoryMember();
+    const verbose = execFileSync("tar", ["-tvzf", artifact], { encoding: "utf8" });
+    const line = verbose.split("\n").find((l) => l.includes("./config/payload/"));
+    // The cycle-3 size regex, verbatim. It must still match the injected ` 0 Aug 1 ` and read 0.
+    const cycle3Regex = /\s(\d+)\s+(?:[A-Z][a-z]{2}\s+\d{1,2}|\d{4}-\d{2}-\d{2})\s/;
+    assert.equal(cycle3Regex.exec(line)?.[1], "0", "the rendering must still say 0 — that is the bypass");
+
+    const report = scanArtifact(artifact);
+    assert.equal(report.files_total, 3);
+    const un = unscannableMembers(report);
+    assert.equal(un.length, 1);
+    assert.equal(un[0].kind, "directory-with-data");
+    assert.match(un[0].why, /carries 39 bytes/, "the header says 39 where the rendering said 0");
+  });
+
+  test("F17 — a member the archive's own listing HIDES is enumerated and refused (macOS trigger)", () => {
+    // The differential half, against the REAL trigger. macOS `tar -czf` writes an AppleDouble
+    // `._name` companion for every file carrying an extended attribute, and `tar -tzf` does not list
+    // it — so a credential stored in an xattr ships inside the artifact and appears in no listing
+    // this scanner has ever read. Every cycle before this one enumerated from that listing.
+    //
+    // The fixture is null off macOS (see the helper: GNU tar has no AppleDouble concept, so there is
+    // nothing to reproduce rather than something skipped). The refusal LOGIC is pinned for CI by the
+    // portable unit test below, which runs `classifyMembers` for both directions everywhere.
+    const artifact = buildArtifactWithHiddenAppleDoubleMember();
+    if (artifact === null) return;
+
+    // The blindness is real before anything is asserted about the gate: tar's own listing does not
+    // mention the member, and the credential is recoverable from the published bytes anyway.
+    const listing = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" });
+    assert.ok(!listing.includes("._LICENSE"), "the archive's own listing must not admit the member exists");
+    const rawBytes = gunzipSync(readFileSync(artifact)).toString("latin1");
+    assert.match(rawBytes, /AKIA[A-Z2-7]{16}/, "yet the credential ships inside the published bytes");
+
+    const report = scanArtifact(artifact);
+    const un = unscannableMembers(report);
+    const hidden = un.filter((u) => u.kind === "hidden-member");
+    assert.ok(hidden.length >= 1, "the hidden member must be COUNTED and REFUSED, not silently dropped");
+    assert.ok(hidden.some((h) => h.path.endsWith("._LICENSE")), "and named");
+    assert.match(hidden[0].why, /AppleDouble/);
+    assert.match(hidden[0].why, /COPYFILE_DISABLE=1/, "the refusal must tell the operator how to rebuild");
+  });
+
+  test("F17 — both directions of the parser differential are refusals, not drops", () => {
+    // The property in isolation, independent of any platform's tar: a member only one of the two
+    // parses can see is uncertifiable in either direction. Declared residual (i) said "nothing here
+    // detects a parser differential" — this is what changed.
+    const { readable, structural } = classifyMembers({
+      aligned: true,
+      tar_only: ["ghost.txt"],
+      members: [
+        { raw_path: "./ok.txt", path: "ok.txt", type: "-", size: 5, listed_by_tar: true },
+        { raw_path: "./._LICENSE", path: "._LICENSE", type: "-", size: 163, listed_by_tar: false },
+        { raw_path: "./other", path: "other", type: "-", size: 9, listed_by_tar: false },
+      ],
+    });
+    assert.deepEqual(readable.map((m) => m.path), ["ok.txt"]);
+    assert.deepEqual(structural.map((s) => s.kind), ["phantom-member", "hidden-member", "hidden-member"]);
+    assert.match(structural[1].why, /AppleDouble/, "the `._` case names the cause the operator will actually hit");
+    assert.match(structural[2].why, /absent from `tar`'s own enumeration/);
+  });
+
+  test("F17 — a stream whose headers cannot be walked refuses WHOLE, naming why", () => {
+    // The walk's own fail-closed edge. A corrupted header must not yield invented members.
+    const good = buildCleanArtifact();
+    const raw = gunzipSync(readFileSync(good));
+    raw[124] = 0x39; // '9' — not a valid octal digit, so the size field cannot be read
+    const broken = join(mkdtempSync(join(tmpdir(), "aiox-plugins-brokenhdr-")), "artifact.tar.gz");
+    writeFileSync(broken, gzipSync(raw));
+
+    const report = scanArtifact(broken);
+    const un = unscannableMembers(report);
+    assert.equal(un.length, 1);
+    assert.equal(un[0].path, "(whole archive)");
+    // Either gate may catch it first depending on what `tar` itself makes of the damage — both are
+    // named, fail-closed refusals. Before this cycle an archive tar cannot unpack threw an uncaught
+    // exception with a stack trace instead of producing a report at all.
+    assert.ok(["unparseable-member-table", "unextractable-archive"].includes(un[0].kind), un[0].kind);
+    assert.equal(report.files_scanned, 0, "nothing may be certified from a stream that cannot be walked");
+  });
+
+  test("F17 — the positive controls still pass: tightening must not refuse legitimate work", () => {
+    // This story's own named failure mode pointed at itself four times. A fix that refuses every
+    // package would "close" F17 and break the product.
+    const report = scanArtifact(buildCleanArtifact());
+    assert.equal(unscannableMembers(report).length, 0);
+    assert.equal(report.findings.length, 0);
+    assert.ok(report.files_scanned >= 4);
   });
 });

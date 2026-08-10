@@ -18,7 +18,13 @@ export function buildTarball(files) {
       writeFileSync(full, content);
     }
     const outPath = join(outDir, "artifact.tar.gz");
-    execFileSync("tar", ["-czf", outPath, "-C", workDir, "."]);
+    // COPYFILE_DISABLE=1 (fix-cycle-4, F17) — without it, macOS `tar` writes an AppleDouble `._name`
+    // companion member for every file, and `tar -tzf` does NOT list them. Those members' bytes ship
+    // inside the artifact, so the scanner's header walk enumerates them and REFUSES them as
+    // uncertifiable. That refusal is correct: this env var is what a well-formed macOS build uses,
+    // and a fixture is supposed to be a well-formed package. The refusal itself is pinned by its own
+    // negative test in test/publish-cli.test.mjs — this is not a fixture edited to dodge a gate.
+    execFileSync("tar", ["-czf", outPath, "-C", workDir, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
     return outPath;
   } finally {
     rmSync(workDir, { recursive: true, force: true });
