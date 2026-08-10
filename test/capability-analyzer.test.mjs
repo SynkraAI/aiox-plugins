@@ -163,7 +163,7 @@ test("AC4: the Windows branch of a real instruction (backslashes, -File) is dete
 
 // --- THE MANDATORY NEGATIVE FIXTURE ---
 test("AC4 NEGATIVE (mandatory): `self-heal` is in NEITHER signal — prose analogy is not execution", () => {
-  // Verbatim from .aiox-core/skills/self-heal/SKILL.md:31 — its ONLY script-shaped match, and the
+  // Verbatim from .aiox-core/skills/self-heal/SKILL.md:32 — its ONLY script-shaped match, and the
   // reason the naive regex returns 9 instead of the correct set.
   const s = skill(
     "self-heal",
