@@ -27,9 +27,10 @@ import {
   buildArtifactWithOversizedSecret,
   buildArtifactWithShadowedDuplicate,
   buildArtifactWithSymlinkMember,
+  buildArtifactWithDirectoryShapedFileMember,
 } from "./helpers/secret-fixtures.mjs";
 import { SECRET_CLASSES } from "../lib/secret-rules.mjs";
-import { scanArtifact, unscannableMembers, renderScanReport } from "../lib/secret-scanner.mjs";
+import { scanArtifact, unscannableMembers, renderScanReport, classifyMembers } from "../lib/secret-scanner.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publishScript = join(here, "..", "publisher", "publish.mjs");
@@ -933,5 +934,95 @@ describe("055.W4.1 fix-cycle-2 — structural members are enumerated and fail-cl
     assert.match(joined, /WHAT THE MEMBER TABLE ITSELF CANNOT SEE/);
     assert.match(joined, /parser differential/);
     assert.match(joined, /nested archive/);
+  });
+});
+
+// ── fix-cycle-3 (F14) — the classifier is an ALLOWLIST: exemption requires positive evidence ─────
+//
+// AC2 requires a negative test PER CLASS, and "a member with a regular-file typeflag whose name ends
+// in `/`" is a class — one that passed green for three cycles. The fixture below is the class's
+// negative test. It is also the reason this cycle happened at all: a bypass proven by execution
+// means a control named BLOCKING does not do what its name says.
+describe("055.W4.1 fix-cycle-3 — a member that only LOOKS like a directory is refused (F14)", () => {
+  function attempt(dir, artifact) {
+    const target = writeEmptyIndex(dir);
+    const ledger = writeEmptyLedger(dir);
+    const before = readFileSync(target, "utf8");
+    const manifest = writeManifest(dir);
+    const res = spawnSync("node", [
+      publishScript,
+      "--manifest", manifest, "--target", target, "--ledger", ledger,
+      "--subject", "acct_test", "--artifact", artifact,
+      "--mirror-url", `https://${GOOD_HOST}/plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--r2-key", `plugins-fixtures/aiox-enterprise/0.0.0-fixture/x.tar.gz`,
+      "--no-push",
+    ], { encoding: "utf8" });
+    return { res, unchanged: readFileSync(target, "utf8") === before, target };
+  }
+
+  test("F14 — typeflag '0' + a name ending in '/' + a credential inside is REFUSED", () => {
+    withTempDir((dir) => {
+      const artifact = buildArtifactWithDirectoryShapedFileMember();
+
+      // The fixture only proves something if the archive is VALID and the credential is genuinely
+      // recoverable from it. The second engine's own attempt at this produced a damaged archive that
+      // yielded only NUL bytes — an unproven assertion dressed as a finding. Assert both properties
+      // here, from the archive itself, before asserting anything about the gate.
+      const members = execFileSync("tar", ["-tzf", artifact], { encoding: "utf8" }).trim().split("\n");
+      assert.equal(members.length, 3, "the archive must have 3 members");
+      assert.ok(members.includes("./config/payload/"), "including the directory-shaped one");
+      const dumped = execFileSync("tar", ["-xOzf", artifact, "./config/payload/"], { encoding: "utf8" });
+      assert.match(dumped, /AKIA[A-Z2-7]{16}/, "the credential must really ship inside the published bytes");
+
+      const { res, unchanged, target } = attempt(dir, artifact);
+      assert.notEqual(res.status, 0, "this exited 0 for three cycles — it is the F14 bypass");
+      assert.match(res.stderr, /REFUSED — 1 member\(s\) could NOT be scanned/);
+      assert.match(res.stderr, /\[directory-with-data\] config\/payload/, "the refusal must name the member");
+      assert.match(res.stderr, /carries 39 bytes of data/, "and cite the evidence: a real directory carries none");
+      assert.ok(unchanged, "a REFUSED publish must not mutate the index");
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).entries.length, 0);
+    });
+  });
+
+  test("F14 — the member is COUNTED, not dropped: 3 members report as 3", () => {
+    // The silent half of the finding. Before the inversion this archive reported "2/2 file(s)
+    // scanned" — a 3-member archive claiming complete coverage, which is the undisclosed blindness
+    // this story treats as disqualifying.
+    const report = scanArtifact(buildArtifactWithDirectoryShapedFileMember());
+    assert.equal(report.files_total, 3);
+    assert.equal(report.files_scanned, 2);
+    assert.match(renderScanReport(report), /2\/3 file\(s\) scanned/);
+    const un = unscannableMembers(report);
+    assert.equal(un.length, 1);
+    assert.equal(un[0].kind, "directory-with-data");
+  });
+
+  test("F14 — REAL directories are still exempt (the carve-out that must not tighten)", () => {
+    // A fix that refused directories would also "close" F14 — and would refuse every package ever
+    // built with `tar -czf x.tgz -C dir .`. This is the control that keeps the inversion honest.
+    const report = scanArtifact(buildCleanArtifact());
+    assert.equal(unscannableMembers(report).length, 0);
+    assert.equal(report.findings.length, 0);
+    assert.ok(report.files_scanned >= 4);
+  });
+
+  test("F14 — exemption requires POSITIVE evidence: a directory whose size is unknown is refused", () => {
+    // The allowlist property itself, independent of the trailing-slash instance: `classifyMembers`
+    // exempts only a member it can positively identify as a directory (rendered `d` AND size 0).
+    // An unverifiable claim to be a directory is unscannable, not a pass.
+    const table = {
+      aligned: true,
+      members: [
+        { raw_path: "./", path: "", type: "d", size: 0 },              // real -> exempt
+        { raw_path: "./a/", path: "a", type: "d", size: null },        // size unknown -> refuse
+        { raw_path: "./b/", path: "b", type: "d", size: 12 },          // data -> refuse
+        { raw_path: "./c.txt", path: "c.txt", type: "-", size: 5 },    // ordinary -> readable
+      ],
+    };
+    const { readable, structural } = classifyMembers(table);
+    assert.deepEqual(readable.map((m) => m.path), ["c.txt"]);
+    assert.deepEqual(structural.map((s) => s.kind), ["directory-with-data", "directory-with-data"]);
+    assert.match(structural[0].why, /size could not be determined/);
+    assert.match(structural[1].why, /carries 12 bytes/);
   });
 });
