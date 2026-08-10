@@ -1,8 +1,14 @@
 name: ci
 
 # Base CI for the catalog repo (story 055.W3.1) + D24's full invariant suite (story 055.W3.3):
-# - D20(1) blocking secret scanning + D20(4) capability analysis: still story 055.W4.1 / 055.W4.2,
-#   not built here.
+# - D20(4) capability analysis landed in story 055.W4.2 (see its step below).
+# - D20(1) BLOCKING secret scanning landed in story 055.W4.1: the gate itself lives inside
+#   publisher/publish.mjs (lib/secret-scanner.mjs + the vendored gitleaks corpus in
+#   lib/secret-rules.mjs), with a per-CLASS negative fixture through the real CLI in
+#   test/publish-cli.test.mjs. The steps this workflow adds for it are the two things a unit test
+#   cannot show: that the scanner BINARY runs end-to-end over a real artifact and REFUSES one with a
+#   planted credential, and that the plugin channel stays decoupled from the binary channel.
+#   What the scanner cannot see is documented in docs/SECRET-SCANNING.md and printed on every run.
 # - D24's three no-going-back invariants (immutable id via lineage_id, burned-name ledger,
 #   license-in-package-root) + the publish-time half of D21 (tier vocabulary from the plugin's own
 #   manifest) — ADDED this story. See docs/INVARIANTS.md for the full design reasoning.
@@ -85,6 +91,42 @@ jobs:
           tar -czf "$tmp/demo.tar.gz" -C "$tmp/pkg" .
           node scripts/analyze-capabilities.mjs --artifact "$tmp/demo.tar.gz" --require-allowed-tools
           echo "OK — analyzer ran end-to-end over a real artifact"
+
+      # story 055.W4.1 (D20(1)) — the BLOCKING scanner, exercised end-to-end over real artifacts.
+      # TWO artifacts on purpose: a clean one that must PASS and a planted one that must be REFUSED.
+      # A step that only ever runs the clean case is the exact failure this story names — "a scanner
+      # that passes verde against a clean package proves nothing". The planted credential is
+      # assembled here from fragments so this workflow file never contains a literal credential shape
+      # (which would also trip the base guard immediately below it).
+      - name: Secret scanning refuses a planted credential and passes a clean package (D20(1) — BLOCKING)
+        run: |
+          set -e
+          tmp="$(mktemp -d)"
+
+          # 1. clean package — must exit 0
+          mkdir -p "$tmp/clean/skills/demo"
+          printf 'MIT\n' > "$tmp/clean/LICENSE"
+          printf -- '---\nname: demo\ndescription: demo\nallowed-tools: Read\n---\n\nNothing secret here.\n' \
+            > "$tmp/clean/skills/demo/SKILL.md"
+          tar -czf "$tmp/clean.tar.gz" -C "$tmp/clean" .
+          node scripts/scan-secrets.mjs --artifact "$tmp/clean.tar.gz"
+          echo "OK — clean package passes"
+
+          # 2. same package + one planted credential — must exit non-zero
+          cp -R "$tmp/clean" "$tmp/dirty"
+          mkdir -p "$tmp/dirty/config"
+          printf 'GH_TOKEN=%s%s\n' 'ghp_' 'aB3dEf7hIjKlM9oPqRsTuVwXyZ0123456789' > "$tmp/dirty/config/ci.env"
+          tar -czf "$tmp/dirty.tar.gz" -C "$tmp/dirty" .
+          if node scripts/scan-secrets.mjs --artifact "$tmp/dirty.tar.gz"; then
+            echo "REFUSED: the scanner accepted an artifact with a planted credential — the gate is decorative"
+            exit 1
+          fi
+          echo "OK — planted credential is REFUSED end-to-end"
+
+      # story 055.W4.1 (AC5) — the plugin channel must never read binary-channel state.
+      - name: Plugin channel stays decoupled from the binary channel (D19 / AC5)
+        run: |
+          node scripts/check-channel-separation.mjs
 
       - name: No obvious secret shapes committed (base guard — NOT the D20(1) blocking scanner)
         run: |

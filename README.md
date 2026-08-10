@@ -28,6 +28,46 @@ catalog side of those decisions; the Cockpit-side consumer lives in the product 
 | `docs/CATALOG-AND-MIRROR.md` | How the index, the R2 artifact mirror, and the publish pipeline fit together | — |
 | `docs/SCHEMA.md` | Field-by-field explanation of the index entry schema | — |
 | `docs/INVARIANTS.md` | The four no-going-back invariants (D24 a/b/c + D21's `AC8`), how each is verified, and the explicitly-named design boundaries | — |
+| `lib/secret-rules.mjs` | The **vendored gitleaks rule corpus** (MIT, a dated snapshot of a named upstream ref) — 14 rules across 14 covered classes, plus what was deliberately left out and why | Enforced publish-time AND in CI (`055.W4.1`) |
+| `lib/secret-scanner.mjs` | The engine that runs those rules over the manifest and the artifact's real bytes, with its blind spots attached to every report | Enforced publish-time AND in CI |
+| `lib/pin.mjs` | Version pin resolution (`<plugin_id>@<version>` → digest) — a **pure function** of (index, pin), which is what makes it deterministic and channel-independent at once | — |
+| `scripts/check-channel-separation.mjs` | CI proof that no executable file here reads binary-channel state (D19 / AC5) | Run on every push |
+| `docs/SECRET-SCANNING.md` | What the blocking scanner catches, why the rules are vendored rather than depended on, and — the important part — **what it does not see** | — |
+| `docs/PIN-AND-CHANNEL.md` | The pin, its determinism proof, **its cost**, and the plugin channel's independence from the binary channel | — |
+
+## Blocking secret scanning (`055.W4.1`, D20(1))
+
+A package containing a recognisable credential **does not publish** — failure, not warning, with no
+flag or environment variable that disables it. The scan covers the **manifest** (which becomes a
+public catalog entry) and the **artifact's real bytes** (what a client downloads and runs), using a
+vendored subset of gitleaks' rule corpus so the detection patterns are reused rather than reinvented.
+
+```bash
+node scripts/scan-secrets.mjs --artifact <plugin.tar.gz>
+node scripts/scan-secrets.mjs --manifest <manifest.json> --json
+```
+
+**Read `docs/SECRET-SCANNING.md` §5 before treating a clean scan as a safety verdict.** In
+particular: the scan inspects the *published* manifest and artifact, **not** the target of an MCP
+pointer resolved at runtime (`{command, args}`, typically `npx <package>`), and an obfuscated or
+encoded secret escapes it entirely. Those limits are printed on **every** run, including successful
+ones.
+
+## Version pin + the plugin channel (`055.W4.1`, D20(2) / D19)
+
+`<plugin_id>@<version>` resolves to a **digest**; the mirror path is content-addressed, so the same
+pin yields the same bytes. The plugin's update cycle is **independent** of the cockpit binary's
+(`ADR-COCKPIT-UPDATE-CHANNELS`, epic 017 — reused as a concept, never reimplemented here), and CI
+enforces that no file in this repo reads binary-channel state.
+
+```bash
+node scripts/resolve-pin.mjs --index index/index.json --pin sinkra-os@1.2.0 [--verify ./downloaded.tar.gz]
+```
+
+**The pin is not pure gain.** It freezes an install — which also means an already-installed artifact
+**cannot be repaired** by a later corrected build. Index freshness (`055.W5.1`, D20(5)) is what gives
+that capability back. The cost is carried on every resolution and printed in every output mode; the
+reasoning is in `docs/PIN-AND-CHANNEL.md` §2.
 
 ## Capability analysis + mandatory `allowed-tools` (`055.W4.2`)
 

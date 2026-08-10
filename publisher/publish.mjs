@@ -22,7 +22,10 @@
 // FULL D24 invariant suite (story 055.W3.3): id-immutability (digest lineage against the
 // persistent ledger), burned-name rejection, license-in-package-root, and the publish-time half of
 // D21 (tier vocabulary from the plugin's own manifest). All FOUR are BLOCKING — no flag/env var
-// disables any of them (AC4/AC6, VC-2/VC-3).
+// disables any of them (AC4/AC6, VC-2/VC-3). Story 055.W4.2 added `allowed-tools` (BLOCKING) +
+// DERIVED capabilities (warn-and-display). Story 055.W4.1 (D20(1)) adds SECRET SCANNING over the
+// manifest and the artifact's real bytes — also BLOCKING, also undisableable; what it can and
+// cannot see is printed on every run and written up in docs/SECRET-SCANNING.md.
 //
 // fix-cycle-1 (055.W3.1 QG @architect, F-AC6-ARTIFACT-BINDING): validation now lives in
 // lib/entry-schema.mjs, shared with scripts/validate-index.mjs, so publish-time and CI-time checks
@@ -76,6 +79,7 @@ import {
   renderCapabilityReport,
   capabilityFindingsAreBlocking,
 } from "../lib/capability-analyzer.mjs";
+import { scanPublishInputs, renderScanReport } from "../lib/secret-scanner.mjs";
 
 function usageAndExit(msg) {
   if (msg) console.error(`error: ${msg}\n`);
@@ -129,6 +133,31 @@ function main() {
     process.exit(1);
   }
   const digestValue = digestFromArtifact;
+
+  // ── story 055.W4.1 (D20(1)) — BLOCKING secret scan ─────────────────────────────────────────────
+  //
+  // Runs FIRST, before any other analysis, on the two things this command makes public: the
+  // MANIFEST (which becomes a public catalog entry) and the ARTIFACT'S REAL BYTES (which a client
+  // downloads and runs). A finding is a REFUSAL — AC1: failure, not warning. There is no flag, no
+  // environment variable and no fixture path that disables it, matching the posture of D24's four
+  // invariants.
+  //
+  // The report is printed on EVERY publish, clean or not, because its `WHAT THIS SCAN CANNOT SEE`
+  // section is the deliverable of AC3: an operator who only ever sees "OK" learns to read this gate
+  // as a safety verdict, which it explicitly is not.
+  const secretScan = scanPublishInputs({ manifestPath: args.manifest, artifactPath: args.artifact });
+  console.error(renderScanReport(secretScan.manifest));
+  if (secretScan.artifact) console.error(renderScanReport(secretScan.artifact));
+  if (secretScan.findings.length) {
+    console.error(`REFUSED — secret scanning found ${secretScan.findings.length} credential(s) (D20(1)/AC1 — BLOCKING):`);
+    for (const f of secretScan.findings) {
+      console.error(`  - [${f.class}] ${f.path}:${f.line} — rule ${f.rule_id}, value ${f.redacted}`);
+    }
+    console.error(
+      "Remove the credential from the package and ROTATE it: it existed in bytes that were prepared for publication, so treat it as exposed regardless of whether the publish went through.",
+    );
+    process.exit(1);
+  }
 
   const emitTiers = args["emit-tiers"]
     ? args["emit-tiers"].split(",").map((t) => t.trim()).filter(Boolean)

@@ -9,9 +9,13 @@
 // fix-cycle-1 (QG round 1, F7 — this comment was stale): the D24 invariant suite (id-immutability
 // history, burned-name ledger, license-in-package-root) and D21's publish-time tier check landed in
 // story 055.W3.3, but wired into SEPARATE scripts (scripts/check-ledger-append-only.mjs,
-// scripts/check-ledger-consistency.mjs) and publisher/publish.mjs — not into this file. Secret
-// scanning (D20(1)) and capability analysis (D20(4)) genuinely remain future work
-// (055.W4.1/055.W4.2), unwired anywhere.
+// scripts/check-ledger-consistency.mjs) and publisher/publish.mjs — not into this file. The same is
+// now true of the two D20 controls that were future work when this comment was first written:
+// capability analysis (D20(4), story 055.W4.2 — lib/capability-analyzer.mjs +
+// scripts/analyze-capabilities.mjs) and BLOCKING secret scanning (D20(1), story 055.W4.1 —
+// lib/secret-scanner.mjs + scripts/scan-secrets.mjs, gating inside publisher/publish.mjs). Both
+// operate on an ARTIFACT's bytes, which this file never has: it validates an index FILE. Neither is
+// wired here, and that is by construction, not omission.
 //
 // fix-cycle-1 (055.W3.1 QG @architect, F-AC6-ARTIFACT-BINDING): now also runs checkArtifactBinding
 // per entry (imported, not reimplemented) so a hand-edited index that skips publish.mjs can't slip
